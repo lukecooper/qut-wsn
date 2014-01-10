@@ -3,7 +3,8 @@
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.5.1"]]
-  :main ^:skip-aot pewson.core
-  :target-path "target/%s"
+  :dependencies [[org.clojure/clojure "1.5.1"]
+                 [com.rmoquin.bundle/jeromq "0.2.0"]
+                 [cheshire "5.2.0"]]
+  :main pewson.core
   :profiles {:uberjar {:aot :all}})
