@@ -92,28 +92,54 @@
            (c/parse-string)
            (println "Job completed:")))))
 
-(defn shellmaker
+(defn shell
   [command]
   #(apply sh (clojure.string/split command #"\s+")))
 
-(def ls (shellmaker "ls -lh"))
+(defn ls
+  []
+  (:out ((shell "ls -lh"))))
 
-(defn make-pub
-  [address port]
-  (let [pub (.socket ctx ZMQ/PUB)]
-    (.bind pub (str "tcp://" address ":" port))
-    pub))
+(defn grep-doc
+  [input]
+  (println (:out (sh "grep" "doc" :in input))))
+
+(defn append-filter
+  [filter message]
+  (clojure.string/join (list filter ":" message)))
+
+(defn remove-filter
+  [message]
+  (second (clojure.string/split message #":" 2)))
+
+(defn publish-socket
+  []
+  (let [socket (.socket ctx ZMQ/PUB)]
+    (.bind socket "tcp://127.0.0.1:8888")
+    socket))
+
+(defn publish
+  [socket filter result]
+  (.send socket (append-filter filter (ls))))
+
+(defmacro subscribe
+  [filter task]
+  `(let [socket# (.socket ctx ZMQ/SUB)]
+     (.connect socket# "tcp://127.0.0.1:8888")
+     (.subscribe socket# ~filter)
+     (~task (remove-filter (String. (.recv socket#))))
+     (.close socket#)))
 
 (defn ls-task
-  [publisher]
-  (.send publisher (str "ls" (:out (ls)))))
+  [publisher filter]
+  (.send publisher (append-filter filter (ls))))
 
 (defn print-task
   [address port filter]
   (let [subscriber (.socket ctx ZMQ/SUB)]
     (.connect subscriber (str "tcp://" address ":" port))
     (.subscribe subscriber filter)
-    (println (clojure.string/replace (String. (.recv subscriber)) #"^("))
+    (println (remove-filter (String. (.recv subscriber))))
     (.close subscriber)))
 
 (defmacro tasker
