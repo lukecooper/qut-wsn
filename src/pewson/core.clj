@@ -1,8 +1,9 @@
 (ns pewson.core
   (:gen-class)
   (:import [org.jeromq ZMQ])
-  (:require (cheshire [core :as c])))
- 
+  (:require (cheshire [core :as c]))
+  (:use [clojure.java.shell :only [sh]]))
+
 (def ctx (ZMQ/context 1))
  
 ;
@@ -12,7 +13,7 @@
 (defn echo-server
   []
   (let [s (.socket ctx ZMQ/REP)]
-    (.bind s "tcp://127.0.0.1:5554")
+    (.bind s "tcp://debianvm.local:5554")
     (loop [msg (String. (.recv s))]
       (.send s (pr-str (load-string msg)))
       (recur (String. (.recv s))))))
@@ -21,7 +22,7 @@
 (defn echo
   [msg]
   (let [s (.socket ctx ZMQ/REQ)]
-    (.connect s "tcp://127.0.0.1:5554")
+    (.connect s "tcp://debianvm.local:5554")
     (.send s msg)
     (println "Server replied:" (String. (.recv s)))
     (.close s)))
@@ -91,7 +92,56 @@
            (c/parse-string)
            (println "Job completed:")))))
 
-;(defn -main
-;    "Comment"
-;    [& args]
-;    (echo-server))
+(defn shellmaker
+  [command]
+  #(apply sh (clojure.string/split command #"\s+")))
+
+(def ls (shellmaker "ls -lh"))
+
+(defn make-pub
+  [address port]
+  (let [pub (.socket ctx ZMQ/PUB)]
+    (.bind pub (str "tcp://" address ":" port))
+    pub))
+
+(defn ls-task
+  [publisher]
+  (.send publisher (str "ls" (:out (ls)))))
+
+(defn print-task
+  [address port filter]
+  (let [subscriber (.socket ctx ZMQ/SUB)]
+    (.connect subscriber (str "tcp://" address ":" port))
+    (.subscribe subscriber filter)
+    (println (clojure.string/replace (String. (.recv subscriber)) #"^("))
+    (.close subscriber)))
+
+(defmacro tasker
+  ([task]
+     `~task)
+  ([task publish-socket]
+     `(let [result# ~task]
+        (.send ~publish-socket result#)))
+  ([task publish-socket subscribe-socket]
+     `(let [message# (.recv ~subscribe-socket)
+            result# (~reverse (~conj ~task message#))]
+        (.send ~publish-socket result#))))
+
+(defn testpub
+  []
+  (let [pub (.socket ctx ZMQ/PUB)]   
+    (.bind pub "tcp://127.0.01:7772")
+    (tasker (:out (ls)) pub)
+    (.close pub)))
+
+(defn testsub
+  []
+  (let [pub (.socket ctx ZMQ/PUB)
+        sub (.socket ctx ZMQ/SUB)]
+    (.bind pub "tcp://127.0.01:7773")
+    (.subscribe sub "")
+    (.connect sub "tcp://127.0.01:7772")
+    (tasker (println) pub sub)
+    (.close pub)
+    (.close sub)))
+
