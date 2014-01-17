@@ -22,6 +22,37 @@
    :exec grep
    :depends 'ls})
 
+(def nodes [{:name 'somename
+             :role 'sensor
+             :arch 'pc}
+            {:name 'someothername
+             :role 'sensor
+             :arch 'pc}
+            {:name 'somecontroller
+             :role 'controller
+             :nodes [{:name 'qtpi01
+                      :role 'sensor
+                      :arch 'pi}
+                     {:name 'qtpi02
+                      :role 'sensor
+                      :arch 'pi}
+                     {:name 'qtpi03
+                      :role 'sensor
+                      :arch 'pi}]}])
+
+
+(declare configure-node)
+
+(defn configure-nodes
+  [nodelist]
+  (map configure-node nodelist))
+
+(defn configure-node
+  [nodedef]
+  (let [name (:name nodedef)]  
+    (if (contains? nodedef :nodes)
+      (configure-nodes (:nodes nodedef)))))
+
 (def ctx (ZMQ/context 1))
 
 (defn gen-pubsock
