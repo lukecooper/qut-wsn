@@ -7,6 +7,7 @@
                  [com.rmoquin.bundle/jeromq "0.2.0"]
                  [cheshire "5.2.0"]
                  [me.raynes/conch "0.5.0"]
-                 [clj-ssh "0.5.7"]]
+                 [clj-ssh "0.5.7"]
+                 [com.palletops/pallet "0.8.0-RC.1"]]
   :Main pewson.core
   :profiles {:uberjar {:aot :all}})
