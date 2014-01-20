@@ -2,9 +2,7 @@
   (:gen-class)
   (:import [org.jeromq ZMQ])
   (:require [clj-ssh.ssh :as ssh])
-  (:require [pallet.compute])
-  (:require [pallet.actions])
-  (:require [pallet.api]))
+  (:require [me.raynes.conch :refer [programs with-programs let-programs]]))
 
 (defn mdns-hostname
   [hostname]
@@ -18,37 +16,46 @@
   [hostname]
   (last ((comp #(clojure.string/split % #"\s+") avahi-resolve mdns-hostname) hostname)))
 
-(defn test-copy
-  [from to ip-addr]
+(defn push-files
+  [path dest user hostname]
+  (let [address (host-lookup hostname)
+        command (str "rsync -avz " path " " user "@" address ":" dest)
+        result (apply clojure.java.shell/sh (clojure.string/split command #"\s+"))]
+    (printf (:out result))))
+
+(defn get-files
+  [path dest user hostname]
+  (let [address (host-lookup hostname)
+        command (str "rsync -avz " user "@" address ":" path " " dest)
+        result (apply clojure.java.shell/sh (clojure.string/split command #"\s+"))]
+    (printf (:out result))))
+
+; local host
+(defn generate-ssh-key
+  [keyfile passphrase]
+  (clojure.java.shell/sh "rm" keyfile (str keyfile ".pub"))
+  (clojure.java.shell/sh "ssh-keygen" "-N" passphrase "-f" keyfile))
+
+; local host
+(defn copy-ssh-key
+  [keyfile user host password]
+  (let [command (str "sshpass -p " password " ssh-copy-id -i " keyfile " " user "@" (host-lookup host))]
+    (apply clojure.java.shell/sh (clojure.string/split command #"\s+"))))
+
+; remote host
+(defn create-user
+  [user host password sudo-password]
   (let [agent (ssh/ssh-agent {})
-        session (ssh/session agent ip-addr {:stric-host-key_check :no})]
+        session (ssh/session agent (host-lookup host) {:strict-host-key-checking :no})]
     (ssh/with-connection session
-      (ssh/scp-to session from to :recursive true))))
+      (ssh/ssh session {:cmd (str "echo " sudo-password " | sudo -S sh -c 'useradd -m " user " && echo " user ":" password " | chpasswd'")}))))
 
-(defn pallet-nodelist
-  [hostname groupname]
-  (let [hostaddress (host-lookup hostname)
-        hostos :ubuntu]
-    (pallet.compute/instantiate-provider
-     "node-list"
-                                        ;:node-list [[hostname, groupname, hostaddress, hostos]]
-     :node-list [["debian", groupname, (host-lookup "debian"), :ubuntu]
-                 ["raspberrypi", groupname, (host-lookup "raspberrypi"), :ubuntu]]
-     )))
+; remote host
+(defn passwordless-sudoer
+  [user host sudo-password]
+  (let [agent (ssh/ssh-agent {})
+        session (ssh/session agent (host-lookup host) {:strict-host-key-checking :no})]
+    (ssh/with-connection session
+      (push-files "bin/sudoers.sh" "bin/" user host)
+      (ssh/ssh session {:cmd (str "echo " sudo-password " | sudo -S sh -c 'bin/sudoers.sh " user " " sudo-password "'")}))))
 
-(defn pallet-ls
-  [nodelist groupname]
-  (pallet.api/lift
-   (pallet.api/group-spec
-    groupname
-    :phases {:configure (pallet.api/plan-fn (pallet.actions/rsync-directory "~/uni/vre014/pewson" "~/"))})
-   :compute nodelist))
-
-(defn test-pallet
-  [hostname filename]
-  (let [groupname "pallet-group"
-        nodelist (pallet-nodelist hostname groupname)]
-    ;(print (:out (first (:result (first (:results (pallet-ls nodelist
-                                        ;groupname)))))))
-    (clojure.pprint/pprint (map #(:result %) (:results (pallet-ls nodelist groupname))))
-))
