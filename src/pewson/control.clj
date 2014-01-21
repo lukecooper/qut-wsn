@@ -1,8 +1,7 @@
 (ns pewson.control
   (:gen-class)
   (:import [org.jeromq ZMQ])
-  (:require [clj-ssh.ssh :as ssh])
-  (:require [me.raynes.conch :refer [programs with-programs let-programs]]))
+  (:require [clj-ssh.ssh :as ssh]))
 
 (defn mdns-hostname
   [hostname]
@@ -16,46 +15,51 @@
   [hostname]
   (last ((comp #(clojure.string/split % #"\s+") avahi-resolve mdns-hostname) hostname)))
 
-(defn push-files
-  [path dest user hostname]
-  (let [address (host-lookup hostname)
-        command (str "rsync -avz " path " " user "@" address ":" dest)
-        result (apply clojure.java.shell/sh (clojure.string/split command #"\s+"))]
-    (printf (:out result))))
+(defn put-path
+  [local-path remote-path user remote-addr]
+  (format "rsync -avz %s %s@%s:%s" local-path user remote-addr remote-path))
 
-(defn get-files
-  [path dest user hostname]
-  (let [address (host-lookup hostname)
-        command (str "rsync -avz " user "@" address ":" path " " dest)
-        result (apply clojure.java.shell/sh (clojure.string/split command #"\s+"))]
-    (printf (:out result))))
+(defn get-path
+  [remote-path local-path user remote-addr]
+  (format "rsync -avz %s@%s:%s %s" user remote-addr remote-path local-path))
 
-; local host
+(defn copy-ssh-key
+  [user password host-address keyfile]
+  (format "sshpass -p %s ssh-copy-id -i %s %s@%s" password keyfile user host-address))
+
 (defn generate-ssh-key
   [keyfile passphrase]
-  (clojure.java.shell/sh "rm" keyfile (str keyfile ".pub"))
-  (clojure.java.shell/sh "ssh-keygen" "-N" passphrase "-f" keyfile))
+  (format "ssh-keygen -N %s -f %s" passphrase keyfile))
 
-; local host
-(defn copy-ssh-key
-  [keyfile user host password]
-  (let [command (str "sshpass -p " password " ssh-copy-id -i " keyfile " " user "@" (host-lookup host))]
-    (apply clojure.java.shell/sh (clojure.string/split command #"\s+"))))
-
-; remote host
 (defn create-user
-  [user host password sudo-password]
-  (let [agent (ssh/ssh-agent {})
-        session (ssh/session agent (host-lookup host) {:strict-host-key-checking :no})]
-    (ssh/with-connection session
-      (ssh/ssh session {:cmd (str "echo " sudo-password " | sudo -S sh -c 'useradd -m " user " && echo " user ":" password " | chpasswd'")}))))
+  [user password sudo-password]
+  (format "echo %s | sudo -S sh -c 'useradd -m %s && echo %s:%s | chpasswd'" sudo-password user user password))
 
-; remote host
-(defn passwordless-sudoer
-  [user host sudo-password]
-  (let [agent (ssh/ssh-agent {})
-        session (ssh/session agent (host-lookup host) {:strict-host-key-checking :no})]
-    (ssh/with-connection session
-      (push-files "bin/sudoers.sh" "bin/" user host)
-      (ssh/ssh session {:cmd (str "echo " sudo-password " | sudo -S sh -c 'bin/sudoers.sh " user " " sudo-password "'")}))))
+(defn make-user-sudo
+  [user sudo-password]
+  ; requires 'bin/sudoers.sh'
+  (format "echo %s | sudo -S sh -c 'bin/sudoers.sh %s %s'" sudo-password user sudo-password))
 
+(defn local-exec
+  [& commands]
+  (doseq [command commands]
+    (let [result (apply clojure.java.shell/sh (clojure.string/split command #"\s+"))]
+      (printf (:out result)))))
+
+(defn remote-exec
+  [host-address & commands]
+  (let [agent (ssh/ssh-agent {})
+        session (ssh/session agent host-address {:strict-host-key-checking :no})]
+    (ssh/with-connection session
+      (doseq [command commands]
+        (let [result (ssh/ssh session {:cmd command})]
+          (printf (:out result)))))))
+
+(comment
+  compile
+  create jar
+  collate dependencies
+  stop service
+  rsync jar and dependencies
+  start service
+  )

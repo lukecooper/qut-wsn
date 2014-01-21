@@ -4,10 +4,7 @@
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.5.1"]
-                 [com.rmoquin.bundle/jeromq "0.2.0"]
-                 [cheshire "5.2.0"]
-                 [me.raynes/conch "0.5.0"]
-                 [clj-ssh "0.5.7"]
-                 [com.palletops/pallet "0.8.0-RC.1"]]
+                 [com.rmoquin.bundle/jeromq "0.2.0"]                               
+                 [clj-ssh "0.5.7"]]
   :Main pewson.core
   :profiles {:uberjar {:aot :all}})
