@@ -4,8 +4,9 @@
   (:use [clojure.java.shell :only [sh]])
   (:use [pewson.control]))
 
-(def ^:const +task-listener-port+ 47687)
-(def ^:const +status-listener-port+ 46876)
+(def ^:const task-listen-port 47687)
+(def ^:const task-publish-port 47688)
+(def ^:const status-listen-port 47689)
 
 (defn ls
   []
@@ -16,8 +17,8 @@
   (:out (clojure.java.shell/sh "grep" "src" :in input)))
 
 (def ls-taskdef
-  {:name 'ls
-   :exec ls
+  {:name "ls"
+   :exec "ls"
    :repeat false})
 
 (def grep-taskdef
@@ -58,11 +59,6 @@
 
 (def ctx (ZMQ/context 1))
 
-(defn gen-pubsock
-  []
-  (let [socket (.socket ctx ZMQ/PUB)]
-    (.bind socket "tcp://127.0.0.1:8888")
-    socket))
 
 (defn append-filter
   [filter message]
@@ -94,62 +90,54 @@
       ((:exec task-defn) input))))
 
 (defn run-task  
-  [task-defn pubsock]
+  [task-defn publish-socket]
   (loop []
     (let [result (exec-task task-defn)]
       (println result)
-      (publish pubsock result (:name task-defn)))
+      (publish publish-socket result (:name task-defn)))
     (if (:repeat task-defn)
       (recur))))
 
 (defn task-handler
-  [message respond]
+  [publish message respond]
   (printf message)
   (.send respond (format "task OK - %s" message)))
 
-(defn status-handler
-  [message respond]
-  (printf message)
-  (.send respond (format "status OK - %s" message)))
-
 (defn listener
   [address port handler]
-  (let [listen (.socket ctx ZMQ/REP)]
-    (.bind listen (format "tcp://%s:%s" address port))
-    (loop [message (String. (.recv listen))]
-      (handler message listen)
-      (recur (String. (.recv listen))))))
+  (let [listen-socket (.socket ctx ZMQ/REP)]
+    (.bind listen-socket (format "tcp://%s:%s" address port))
+    (loop [message (String. (.recv listen-socket))]
+      (handler message listen-socket)
+      (recur (String. (.recv listen-socket))))))
 
-(defn test-listener
-  []
-  (let [local-address (pewson.control/host-address "localhost")]
-    (listener local-address +task-listener-port+ task-handler)))
-
-(defn send-task
-  [hostname message]
-  (let [socket (.socket ctx ZMQ/REQ)]
-    (.connect socket (format "tcp://%s:%s" (pewson.control/host-address hostname) +task-listener-port+))
-    (.send socket message)
-    (let [response (String. (.recv socket))]
-      (.close socket)
-      response)))
-
-(defn send-status
-  [hostname message]
-  (let [socket (.socket ctx ZMQ/REQ)]
-    (.connect socket (format "tcp://%s:%s" (pewson.control/host-address hostname) +status-listener-port+))
-    (.send socket message)
-    (let [response (String. (.recv socket))]
-      (.close socket)
-      response)))
+(defn publisher
+  [address port]
+  (let [publish-socket (.socket ctx ZMQ/PUB)]
+    (.bind publish-socket (format "tcp://%s:%s" address port))
+    publish-socket))
 
 (defn -main
   [& args]
   (let [local-address (pewson.control/host-address "localhost")
-        task-listener (future (listener local-address +task-listener-port+ task-handler))
-        status-listener (future (listener local-address +status-listener-port+ status-handler))]
+        publish-socket (publisher local-address task-publish-port)
+        task-listener (future (listener local-address task-listen-port (partial task-handler publish-socket)))]
     (.addShutdownHook (Runtime/getRuntime)
                       (Thread. (fn []
-                                 (future-cancel task-listener)
-                                 (future-cancel status-listener))))
-    (println @task-listener)))
+                                 (.close publish))))
+    @task-listener))
+
+(defn test-listener
+  []
+  (let [local-address (pewson.control/host-address "localhost")
+        publish-socket (publisher local-address task-publish-port)]
+    (listener local-address task-listen-port (partial task-handler publish-socket))))
+
+(defn test-tasker
+  [hostname message]
+  (let [socket (.socket ctx ZMQ/REQ)]
+    (.connect socket (format "tcp://%s:%s" (pewson.control/host-address hostname) task-listen-port))
+    (.send socket message)
+    (let [response (String. (.recv socket))]
+      (.close socket)
+      response)))
