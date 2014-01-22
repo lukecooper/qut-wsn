@@ -11,9 +11,13 @@
   [hostname]
   (:out (clojure.java.shell/sh "avahi-resolve-host-name" "-4" hostname)))
 
-(defn host-lookup
+(defn host-address
   [hostname]
-  (last ((comp #(clojure.string/split % #"\s+") avahi-resolve mdns-hostname) hostname)))
+  (let [lookup-name (if (= (clojure.string/lower-case hostname) "localhost")
+                      (clojure.string/trim (:out (clojure.java.shell/sh "hostname")))
+                      hostname)]
+    (last ((comp #(clojure.string/split % #"\s+") avahi-resolve mdns-hostname) lookup-name))))
+
 
 (defn put-path
   [local-path remote-path user remote-addr]
@@ -42,18 +46,14 @@
 
 (defn local-exec
   [& commands]
-  (doseq [command commands]
-    (let [result (apply clojure.java.shell/sh (clojure.string/split command #"\s+"))]
-      (printf (:out result)))))
+  (doall (map #(:out (apply clojure.java.shell/sh (clojure.string/split % #"\s+"))) commands)))
 
 (defn remote-exec
   [host-address & commands]
   (let [agent (ssh/ssh-agent {})
         session (ssh/session agent host-address {:strict-host-key-checking :no})]
     (ssh/with-connection session
-      (doseq [command commands]
-        (let [result (ssh/ssh session {:cmd command})]
-          (printf (:out result)))))))
+      (doall (map #(:out (ssh/ssh session {:cmd %})) commands)))))
 
 (comment
   compile

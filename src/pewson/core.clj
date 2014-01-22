@@ -1,8 +1,11 @@
 (ns pewson.core
   (:gen-class)
   (:import [org.jeromq ZMQ])
-  (:require (cheshire [core :as c]))
-  (:use [clojure.java.shell :only [sh]]))
+  (:use [clojure.java.shell :only [sh]])
+  (:use [pewson.control]))
+
+(def ^:const +task-listener-port+ 47687)
+(def ^:const +status-listener-port+ 46876)
 
 (defn ls
   []
@@ -98,3 +101,55 @@
       (publish pubsock result (:name task-defn)))
     (if (:repeat task-defn)
       (recur))))
+
+(defn task-handler
+  [message respond]
+  (printf message)
+  (.send respond (format "task OK - %s" message)))
+
+(defn status-handler
+  [message respond]
+  (printf message)
+  (.send respond (format "status OK - %s" message)))
+
+(defn listener
+  [address port handler]
+  (let [listen (.socket ctx ZMQ/REP)]
+    (.bind listen (format "tcp://%s:%s" address port))
+    (loop [message (String. (.recv listen))]
+      (handler message listen)
+      (recur (String. (.recv listen))))))
+
+(defn test-listener
+  []
+  (let [local-address (pewson.control/host-address "localhost")]
+    (listener local-address +task-listener-port+ task-handler)))
+
+(defn send-task
+  [hostname message]
+  (let [socket (.socket ctx ZMQ/REQ)]
+    (.connect socket (format "tcp://%s:%s" (pewson.control/host-address hostname) +task-listener-port+))
+    (.send socket message)
+    (let [response (String. (.recv socket))]
+      (.close socket)
+      response)))
+
+(defn send-status
+  [hostname message]
+  (let [socket (.socket ctx ZMQ/REQ)]
+    (.connect socket (format "tcp://%s:%s" (pewson.control/host-address hostname) +status-listener-port+))
+    (.send socket message)
+    (let [response (String. (.recv socket))]
+      (.close socket)
+      response)))
+
+(defn -main
+  [& args]
+  (let [local-address (pewson.control/host-address "localhost")
+        task-listener (future (listener local-address +task-listener-port+ task-handler))
+        status-listener (future (listener local-address +status-listener-port+ status-handler))]
+    (.addShutdownHook (Runtime/getRuntime)
+                      (Thread. (fn []
+                                 (future-cancel task-listener)
+                                 (future-cancel status-listener))))
+    (println @task-listener)))

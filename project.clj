@@ -6,5 +6,5 @@
   :dependencies [[org.clojure/clojure "1.5.1"]
                  [com.rmoquin.bundle/jeromq "0.2.0"]                               
                  [clj-ssh "0.5.7"]]
-  :Main pewson.core
+  :main pewson.core
   :profiles {:uberjar {:aot :all}})
