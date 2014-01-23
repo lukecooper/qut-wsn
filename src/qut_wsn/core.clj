@@ -1,12 +1,63 @@
-(ns pewson.core
+(ns qut-wsn.core
   (:gen-class)
   (:import [org.jeromq ZMQ])
   (:use [clojure.java.shell :only [sh]])
-  (:use [pewson.control]))
+  (:use [qut-wsn.control]))
 
 (def ^:const task-listen-port 47687)
 (def ^:const task-publish-port 47688)
 (def ^:const status-listen-port 47689)
+
+(def startup-tasks
+  [{:name "record"
+    :exec "record"
+    :repeat true
+    :params [sample-rate bit-rate channels]}
+   {:name "audio-archive"
+    :exec "archive"
+    :depends "record"
+    :params [folder]}
+   {:name "audio-cleanup"
+    :exec "cleanup"
+    :depends "audio-archive"
+    :params [max-folder-size]}
+   {:name "spectrogram"
+    :exec "spectrogram"
+    :depends "audio-archive"
+    :params [window-size overlap]}
+   {:name "spectrogram-archive"
+    :exec "archive"
+    :depends "spectrogram"
+    :params [folder]}
+   {:name "spectrogram-cleanup"
+    :exec "cleanup"
+    :params [max-folder-size]}
+   {:name "error-handler"
+    :exec "error-handler"
+    :depends "error"}])
+
+(def sample-query
+  {:name "aci" ; acoustic complexity index
+   :id 234 ; added at runtime
+   :tasks [{:name "aci"
+            :exec "aci"
+            :depends "spectrogram-archive"
+            :query-name "aci" ; added at runtime
+            :query-id 234 ; added at runtime
+            }
+           {:name "aci-results"
+            :exec "results"
+            :params [address port] ; address and port to send results to
+            :depends "aci"
+            :query-name "aci" ; added at runtime
+            :query-id 234 ; added at runtime
+            }
+           {:name "aci-collate"
+            :exec "aci-collate"
+            :params [port] ; port to listen on for results
+            }]})
+
+(query sample-query)
 
 (defn ls
   []
@@ -119,24 +170,24 @@
 
 (defn -main
   [& args]
-  (let [local-address (pewson.control/host-address "localhost")
+  (let [local-address (qut-wsn.control/host-address "localhost")
         publish-socket (publisher local-address task-publish-port)
         task-listener (future (listener local-address task-listen-port (partial task-handler publish-socket)))]
     (.addShutdownHook (Runtime/getRuntime)
                       (Thread. (fn []
-                                 (.close publish))))
+                                 (.close publish-socket))))
     @task-listener))
 
 (defn test-listener
   []
-  (let [local-address (pewson.control/host-address "localhost")
+  (let [local-address (qut-wsn.control/host-address "localhost")
         publish-socket (publisher local-address task-publish-port)]
     (listener local-address task-listen-port (partial task-handler publish-socket))))
 
 (defn test-tasker
   [hostname message]
   (let [socket (.socket ctx ZMQ/REQ)]
-    (.connect socket (format "tcp://%s:%s" (pewson.control/host-address hostname) task-listen-port))
+    (.connect socket (format "tcp://%s:%s" (qut-wsn.control/host-address hostname) task-listen-port))
     (.send socket message)
     (let [response (String. (.recv socket))]
       (.close socket)

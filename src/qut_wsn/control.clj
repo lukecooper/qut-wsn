@@ -1,4 +1,4 @@
-(ns pewson.control
+(ns qut-wsn.control
   (:gen-class)
   (:import [org.jeromq ZMQ])
   (:require [clj-ssh.ssh :as ssh]))

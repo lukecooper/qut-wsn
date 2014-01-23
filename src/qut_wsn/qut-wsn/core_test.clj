@@ -1,6 +1,6 @@
-(ns pewson.core-test
+(ns qut-wsn.core-test
   (:require [clojure.test :refer :all]
-            [pewson.core :refer :all]))
+            [qut-wsn.core :refer :all]))
 
 (deftest a-test
   (testing "FIXME, I fail."

@@ -1,10 +1,10 @@
-(defproject pewson "0.1.0-SNAPSHOT"
-  :description "FIXME: write description"
-  :url "http://example.com/FIXME"
-  :license {:name "Eclipse Public License"
-            :url "http://www.eclipse.org/legal/epl-v10.html"}
+(defproject qut-wsn "0.1.0-SNAPSHOT"
+  :description "QUT Wireless Sensor Network"
+  :url "http://github.com/lukecooper/qut-wsn"
+  :license {:name "GNU General Public License, version 2"
+            :url "http://www.gnu.org/licenses/gpl-2.0.html"}
   :dependencies [[org.clojure/clojure "1.5.1"]
-                 [com.rmoquin.bundle/jeromq "0.2.0"]                               
+                 [com.rmoquin.bundle/jeromq "0.2.0"]                            
                  [clj-ssh "0.5.7"]]
-  :main pewson.core
+  :main qut-wsn.core
   :profiles {:uberjar {:aot :all}})
