@@ -5,6 +5,7 @@
             :url "http://www.gnu.org/licenses/gpl-2.0.html"}
   :dependencies [[org.clojure/clojure "1.5.1"]
                  [com.rmoquin.bundle/jeromq "0.2.0"]                            
-                 [clj-ssh "0.5.7"]]
+                 [clj-ssh "0.5.7"]
+                 [clj-time "0.6.0"]]
   :main qut-wsn.core
   :profiles {:uberjar {:aot :all}})

@@ -2,7 +2,10 @@
   (:gen-class)
   (:import [org.jeromq ZMQ])
   (:use [clojure.java.shell :only [sh]])
-  (:use [qut-wsn.control]))
+  (:use [qut-wsn.control])
+  (:use [clj-time.core :only [interval in-millis]]
+        [clj-time.local :only [local-now]]
+        [clj-time.format :only [formatters unparse]]))
 
 (def ^:const task-listen-port 47687)
 (def ^:const task-publish-port 47688)
@@ -12,26 +15,26 @@
   [{:name "record"
     :exec "record"
     :repeat true
-    :params [sample-rate bit-rate channels]}
+    :params "[sample-rate bit-rate channels]"}
    {:name "audio-archive"
     :exec "archive"
     :depends "record"
-    :params [folder]}
+    :params "[folder]"}
    {:name "audio-cleanup"
     :exec "cleanup"
     :depends "audio-archive"
-    :params [max-folder-size]}
+    :params "[max-folder-size]"}
    {:name "spectrogram"
     :exec "spectrogram"
     :depends "audio-archive"
-    :params [window-size overlap]}
+    :params "[window-size overlap]"}
    {:name "spectrogram-archive"
     :exec "archive"
     :depends "spectrogram"
-    :params [folder]}
+    :params "[folder]"}
    {:name "spectrogram-cleanup"
     :exec "cleanup"
-    :params [max-folder-size]}
+    :params "[max-folder-size]"}
    {:name "error-handler"
     :exec "error-handler"
     :depends "error"}])
@@ -47,17 +50,45 @@
             }
            {:name "aci-results"
             :exec "results"
-            :params [address port] ; address and port to send results to
+            :params "[address port]" ; address and port to send results to
             :depends "aci"
             :query-name "aci" ; added at runtime
             :query-id 234 ; added at runtime
             }
            {:name "aci-collate"
             :exec "aci-collate"
-            :params [port] ; port to listen on for results
+            :params "[port]" ; port to listen on for results
             }]})
 
-(query sample-query)
+
+(defn seconds-remaining
+  "Returns the number of seconds (to three places) until the next minute begins for
+   the given time."
+  [the-time]
+  (let [next-minute (.withMillisOfSecond (.withSecondOfMinute (.plusMinutes the-time 1) 0) 0)
+        record-time (in-millis (interval the-time next-minute))]
+    (/ record-time 1000.0)))
+
+(defn time-as-filename
+  [the-time suffix]
+  (let [this-minute (.withMillisOfSecond (.withSecondOfMinute the-time 0) 0)
+        time-formatter (formatters :date-hour-minute)]
+    (format "%s.%s" (unparse time-formatter this-minute) suffix)))
+
+(defn record-audio
+  [sample-rate bit-rate channels]
+  (let [time-now (local-now)
+        duration (seconds-remaining time-now)
+        filename (time-as-filename time-now "wav")
+        command (format "rec -q -r %s -b %s -c %s %s trim 0 %s" sample-rate bit-rate channels filename duration)]
+    (qut-wsn.control/local-exec command)))
+
+(comment
+  time.next-whole-minute - time.now)
+
+(defn record
+  [sample-rate bit-rate channels]
+  (printf "Hello"))
 
 (defn ls
   []
