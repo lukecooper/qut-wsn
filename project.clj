@@ -6,6 +6,7 @@
   :dependencies [[org.clojure/clojure "1.5.1"]
                  [com.rmoquin.bundle/jeromq "0.2.0"]                            
                  [clj-ssh "0.5.7"]
-                 [clj-time "0.6.0"]]
+                 [clj-time "0.6.0"]
+                 [antler/commons-io "2.2.0"]]
   :main qut-wsn.core
   :profiles {:uberjar {:aot :all}})

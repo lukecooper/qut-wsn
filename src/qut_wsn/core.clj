@@ -5,7 +5,8 @@
   (:use [qut-wsn.control])
   (:use [clj-time.core :only [interval in-millis]]
         [clj-time.local :only [local-now]]
-        [clj-time.format :only [formatters unparse]]))
+        [clj-time.format :only [formatters unparse]])
+  (:import [org.apache.commons.io FileUtils]))
 
 (def ^:const task-listen-port 47687)
 (def ^:const task-publish-port 47688)
@@ -69,26 +70,51 @@
         record-time (in-millis (interval the-time next-minute))]
     (/ record-time 1000.0)))
 
-(defn time-as-filename
-  [the-time suffix]
+(defn filepath
+  [filename]
+  (.getCanonicalPath (clojure.java.io/file filename)))
+
+(defn time-as-filepath
+  [folder the-time suffix]
   (let [this-minute (.withMillisOfSecond (.withSecondOfMinute the-time 0) 0)
         time-formatter (formatters :date-hour-minute)]
-    (format "%s.%s" (unparse time-formatter this-minute) suffix)))
+    (format "%s/%s.%s" folder (unparse time-formatter this-minute) suffix)))
 
 (defn record-audio
-  [sample-rate bit-rate channels]
+  [sample-rate bit-rate channels destination]
   (let [time-now (local-now)
         duration (seconds-remaining time-now)
-        filename (time-as-filename time-now "wav")
+        filename (time-as-filepath destination time-now "wav")
         command (format "rec -q -r %s -b %s -c %s %s trim 0 %s" sample-rate bit-rate channels filename duration)]
-    (qut-wsn.control/local-exec command)))
+    (local-exec command)
+    (filepath filename)))
 
 (comment
-  time.next-whole-minute - time.now)
+  (defn archive
+    [archive-folder max-folder-size filepath]
+    (let [folder-size (FileUtils/sizeOfDirectory (clojure.java.io/file archive-folder))
+          file-size (FileUtils/sizeOf (clojure.java.io/file filepath))]
+      (loop [folder-size (FileUtils/sizeOfDirectiry (clojure.java.io/file archive-folder))]
+        (if (> folder-size max-folder-size)
+                                        ; delete oldest file
+          )
+        (recur (FileUtils/sizeOfDirectory (clojure.java.io/file archive-folder)))))))
 
-(defn record
-  [sample-rate bit-rate channels]
-  (printf "Hello"))
+; folder size eg. (FileUtils/sizeOfDirectory (clojure.java.io/file "/home/luke/uni"))
+
+(defn test-sort
+  []
+  (let [filelist (.listFiles (clojure.java.io/file "/home/luke"))
+        sorted-fl (sort (comparator #(compare (.getName %1) (.getName %2))) (aclone filelist))
+        ]
+    (clojure.pprint/pprint sorted-fl)))
+
+(comment
+  ; not actually sorting :|
+  (clojure.pprint/pprint
+   (sort
+    (comparator #(compare (.getName %1) (.getName %2)))
+    (.listFiles (clojure.java.io/file "/home/luke")))))
 
 (defn ls
   []
