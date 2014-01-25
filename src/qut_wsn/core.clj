@@ -2,11 +2,17 @@
   (:gen-class)
   (:import [org.jeromq ZMQ])
   (:use [clojure.java.shell :only [sh]])
+  (:use [clojure.contrib.math :only [abs]])
   (:use [qut-wsn.control])
   (:use [clj-time.core :only [interval in-millis]]
         [clj-time.local :only [local-now]]
-        [clj-time.format :only [formatters unparse]])
-  (:import [org.apache.commons.io FileUtils]))
+        [clj-time.format :only [formatters unparse]]
+        [clj-time.coerce :only [to-long from-long]])
+  (:use [clojure.java.io :only [file output-stream input-stream]])
+  (:import [com.musicg.wave Wave])
+  (:import [com.musicg.wave.extension Spectrogram])
+  (:import [org.apache.commons.io FileUtils])
+  (:import [java.nio ByteBuffer]))
 
 (def ^:const task-listen-port 47687)
 (def ^:const task-publish-port 47688)
@@ -72,7 +78,7 @@
 
 (defn filepath
   [filename]
-  (.getCanonicalPath (clojure.java.io/file filename)))
+  (.getPath (clojure.java.io/file filename)))
 
 (defn time-as-filepath
   [folder the-time suffix]
@@ -89,6 +95,34 @@
     (local-exec command)
     (filepath filename)))
 
+(defn spectrogram
+  [input-file fft-sample-size overlap]
+  (let [spectrogram (.getSpectrogram (Wave. input-file) fft-sample-size overlap)]
+    (.getAbsoluteSpectrogramData spectrogram)))
+
+(defn delta
+  [[val & coll]]
+  (if (empty? coll)
+    val
+    (+ (abs (- val (first coll)))
+       (delta coll))))
+
+(defn aci
+  [spectrogram]
+  (into-array Double/TYPE
+    (map (fn [frame]
+           (let [sum (reduce + frame)
+                 delta (delta frame)]
+             (if (> sum 0) (/ delta sum))))
+     spectrogram)))
+
+(declare write-array)
+
+(defn write-spectrogram
+  [input-file spectrogram-data]
+  (let [spectrogram-filepath (clojure.string/replace input-file #"(\w+)\.(\w+)$" "$1.spec")]
+    (write-array spectrogram-data spectrogram-filepath)))
+
 (comment
   (defn archive
     [archive-folder max-folder-size filepath]
@@ -102,19 +136,80 @@
 
 ; folder size eg. (FileUtils/sizeOfDirectory (clojure.java.io/file "/home/luke/uni"))
 
-(defn test-sort
-  []
-  (let [filelist (.listFiles (clojure.java.io/file "/home/luke"))
-        sorted-fl (sort (comparator #(compare (.getName %1) (.getName %2))) (aclone filelist))
-        ]
-    (clojure.pprint/pprint sorted-fl)))
+(defn hidden-file?
+  [file]
+  (= (first (.getName file)) \.))
+
+(defn compare-files
+  [file1 file2]
+  (let [mod1 (from-long (.lastModified file1))
+        mod2 (from-long (.lastModified file2))]
+    (compare mod1 mod2)))
+
+(defn oldest-files
+  "Returns a list of files in folder sorted by oldest last modified time."
+  [folder]
+  (let [file-list (aclone (.listFiles (clojure.java.io/file folder)))]
+    (reverse (map #(.getPath %) (sort compare-files (filter #(not (hidden-file? %)) file-list))))))
+
+(defn write-array
+  [array filename]
+  (let [x-len (alength array)
+        y-len (alength (aget array 0))
+        buf-len (+ 4 4 (* x-len y-len 8))
+        byte-buffer (ByteBuffer/allocate buf-len)
+        buffer (byte-array buf-len)]
+    (do      
+      (.putInt byte-buffer x-len)
+      (.putInt byte-buffer y-len)
+      (doseq [x (range x-len)
+              y (range y-len)]
+        (.putDouble byte-buffer
+                    ; fully hinted for performace
+                    (let [#^doubles a (aget #^objects array x)]
+                      (aget a y))))
+      (.flip byte-buffer)
+      (.get byte-buffer buffer)
+      (with-open [out (output-stream (file filename))]
+        (.write out buffer)))))
+
+(defn read-array-size
+  [filename]
+  (with-open [in (input-stream filename)]
+    (let [buffer (byte-array 8)
+          read-bytes (.read in buffer 0 8)
+          byte-buffer (ByteBuffer/allocate read-bytes)]
+      (.put byte-buffer buffer 0 read-bytes)
+      (.flip byte-buffer)
+      (let [x-len (.getInt byte-buffer)
+            y-len (.getInt byte-buffer)]
+        [x-len y-len]))))
+
+(defn read-array
+  [filename]
+  (let [[x-len y-len] (read-array-size filename)
+        array (make-array Double/TYPE x-len y-len)]
+    (with-open [in (input-stream filename)]
+      (let [buffer-size (+ 4 4 (* x-len y-len 8))
+            buffer (byte-array buffer-size)
+            read-bytes (.read in buffer 0 buffer-size)
+            byte-buffer (ByteBuffer/allocate read-bytes)]
+        (.put byte-buffer buffer 0 read-bytes)
+        (.flip byte-buffer)
+        (.getInt byte-buffer) ; x-len
+        (.getInt byte-buffer) ; y-len
+        (doseq [x (range x-len)
+                y (range y-len)]
+          ; fully hinted for performance
+          (let [#^doubles a (aget #^objects array x)]
+            (aset a y (.getDouble byte-buffer))))
+        array))))
 
 (comment
-  ; not actually sorting :|
-  (clojure.pprint/pprint
-   (sort
-    (comparator #(compare (.getName %1) (.getName %2)))
-    (.listFiles (clojure.java.io/file "/home/luke")))))
+  (defn read-array
+    [filename]
+    (with-open [in (input-stream filename)]
+      (let [buffer (b)]))))
 
 (defn ls
   []

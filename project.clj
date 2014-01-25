@@ -4,9 +4,12 @@
   :license {:name "GNU General Public License, version 2"
             :url "http://www.gnu.org/licenses/gpl-2.0.html"}
   :dependencies [[org.clojure/clojure "1.5.1"]
+                 [org.clojure/clojure-contrib "1.2.0"]
                  [com.rmoquin.bundle/jeromq "0.2.0"]                            
                  [clj-ssh "0.5.7"]
                  [clj-time "0.6.0"]
-                 [antler/commons-io "2.2.0"]]
+                 [antler/commons-io "2.2.0"]
+                 [com.musicg/musicg "1.4.2.0"]]
+  :repositories {"project" "file:repository"}
   :main qut-wsn.core
   :profiles {:uberjar {:aot :all}})
