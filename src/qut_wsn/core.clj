@@ -19,34 +19,6 @@
 (def ^:const task-publish-port 47688)
 (def ^:const status-listen-port 47689)
 
-(def startup-tasks
-  [{:name "record"
-    :exec "record"
-    :repeat true
-    :params "[sample-rate bit-rate channels]"}
-   {:name "audio-archive"
-    :exec "archive"
-    :depends "record"
-    :params "[folder]"}
-   {:name "audio-cleanup"
-    :exec "cleanup"
-    :depends "audio-archive"
-    :params "[max-folder-size]"}
-   {:name "spectrogram"
-    :exec "spectrogram"
-    :depends "audio-archive"
-    :params "[window-size overlap]"}
-   {:name "spectrogram-archive"
-    :exec "archive"
-    :depends "spectrogram"
-    :params "[folder]"}
-   {:name "spectrogram-cleanup"
-    :exec "cleanup"
-    :params "[max-folder-size]"}
-   {:name "error-handler"
-    :exec "error-handler"
-    :depends "error"}])
-
 (def sample-query
   {:name "aci" ; acoustic complexity index
    :id 234 ; added at runtime
@@ -67,7 +39,6 @@
             :exec "aci-collate"
             :params "[port]" ; port to listen on for results
             }]})
-
 
 (defn seconds-remaining
   "Returns the number of seconds (to three places) until the next minute begins for
@@ -210,16 +181,7 @@
   []
   (trim (:out (sh "hostname"))))
 
-(comment
-  as qut-wsn-prime
-  read node-tree
-  read node-map
-  make new node tree with bound ip addresses
-  
-  host
-  i get a node-def with a host name, role and list of child nodes
-  i store my role and my list of child nodes
-  i iterate through my list of child nodes and give them their node-def)
+
 
 ;; on wsn-prime startup
 ;;   if config files exist
@@ -247,18 +209,16 @@
 
 (defn read-network-conf
   [network-structure-filename hostname-lookup-filename]
-  (let [network-structure (read-string (slurp network-structure-filename))
-        hostname-lookup (read-string (slurp hostname-lookup-filename))]
-    (merge-addresses network-structure hostname-lookup)))
+  (if (and (.exists (file network-structure-filename))
+           (.exists (file hostname-lookup-filename)))
+    (let [network-structure (read-string (slurp network-structure-filename))
+          hostname-lookup (read-string (slurp hostname-lookup-filename))]
+      (merge-addresses network-structure hostname-lookup))
+    {}))
 
 (def node-tree
   (read-network-conf "network-structure.clj" "hostname-lookup.clj"))
 
-(declare configure-node)
-
-(defn configure-nodes
-  [nodelist]
-  (map configure-node nodelist))
 
 (defn configure-node
   [nodedef]
@@ -267,8 +227,9 @@
     (if (contains? nodedef :nodes)
       (configure-nodes (:nodes nodedef)))))
 
-(def ctx (ZMQ/context 1))
 
+
+(def ctx (ZMQ/context 1))
 
 (defn append-filter
   [filter message]
@@ -310,8 +271,7 @@
 
 (defn task-handler
   [publish message respond]
-  (printf message)
-  (.send respond (format "task OK - %s" message)))
+  (.send respond (format "%s|OK" (hostname))))
 
 (defn listener
   [address port handler]
@@ -335,6 +295,7 @@
     (.addShutdownHook (Runtime/getRuntime)
                       (Thread. (fn []
                                  (.close publish-socket))))
+    (println "Started qut-wsn listener...")
     @task-listener))
 
 (defn test-listener
@@ -362,10 +323,26 @@
 
 ;; (run-task "task" arg1 arg2 argn)
 
+(defn send-message
+  "Synchronously sends a string message to the given address and returns the response."
+  [address port message]
+  (let [socket (.socket ctx ZMQ/REQ)
+        sock-addr (format "tcp://%s:%s" address port)]
+    (.connect socket sock-addr)
+    (.send socket message)
+    (let [response (String. (.recv socket))]
+      (.close socket)
+      response)))
+
+(defn check-responses
+  [responses]
+  responses)
+
 (defn run-task
   "task|arg1|arg2|arg3"
   [task-name & args]
   (let [nodes (:nodes node-tree)
         message (clojure.string/join "|" (cons task-name (map pr-str args)))]
-    message))
+    (-> (map (fn [node-def] (send-message (:address node-def) task-listen-port message)) nodes)
+        (check-responses))))
 
