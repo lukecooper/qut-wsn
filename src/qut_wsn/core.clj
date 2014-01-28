@@ -2,6 +2,7 @@
   (:gen-class)
   (:import [org.jeromq ZMQ])
   (:use [clojure.java.shell :only [sh]])
+  (:use [clojure.string :only [trim]])
   (:use [clojure.contrib.math :only [abs]])
   (:use [qut-wsn.control])
   (:use [clj-time.core :only [interval in-millis]]
@@ -205,48 +206,53 @@
             (aset a y (.getDouble byte-buffer))))
         array))))
 
-(comment
-  (defn read-array
-    [filename]
-    (with-open [in (input-stream filename)]
-      (let [buffer (b)]))))
-
-(defn ls
+(defn hostname
   []
-  (:out (clojure.java.shell/sh "ls" "-lh")))
+  (trim (:out (sh "hostname"))))
 
-(defn grep
-  [input]
-  (:out (clojure.java.shell/sh "grep" "src" :in input)))
+(comment
+  as qut-wsn-prime
+  read node-tree
+  read node-map
+  make new node tree with bound ip addresses
+  
+  host
+  i get a node-def with a host name, role and list of child nodes
+  i store my role and my list of child nodes
+  i iterate through my list of child nodes and give them their node-def)
 
-(def ls-taskdef
-  {:name "ls"
-   :exec "ls"
-   :repeat false})
+;; on wsn-prime startup
+;;   if config files exist
+;;     read 'em
+;;     configure me
+;;     execute configure task on my children (i know how to contact
+;;   them now)
 
-(def grep-taskdef
-  {:name 'grep
-   :exec grep
-   :depends 'ls})
+;; on qut-rpi-0xx startup
+;;   no config files exist
+;;   start task listener
+;;   receive configure task with node-def
+;;   configure me
+;;   execute configure task on my children
 
-(def nodes [{:name 'somename
-             :role 'sensor
-             :arch 'pc}
-            {:name 'someothername
-             :role 'sensor
-             :arch 'pc}
-            {:name 'somecontroller
-             :role 'controller
-             :nodes [{:name 'qtpi01
-                      :role 'sensor
-                      :arch 'pi}
-                     {:name 'qtpi02
-                      :role 'sensor
-                      :arch 'pi}
-                     {:name 'qtpi03
-                      :role 'sensor
-                      :arch 'pi}]}])
 
+
+(defn merge-addresses
+  [node-def node-map]
+  (let [node-address ((keyword (:name node-def)) node-map)
+        merged-def (merge node-def {:address node-address})]
+    (if (contains? merged-def :nodes)
+      (merge merged-def {:nodes (mapv #(merge-addresses % node-map) (:nodes merged-def))})
+      merged-def)))
+
+(defn read-network-conf
+  [network-structure-filename hostname-lookup-filename]
+  (let [network-structure (read-string (slurp network-structure-filename))
+        hostname-lookup (read-string (slurp hostname-lookup-filename))]
+    (merge-addresses network-structure hostname-lookup)))
+
+(def node-tree
+  (read-network-conf "network-structure.clj" "hostname-lookup.clj"))
 
 (declare configure-node)
 
@@ -256,7 +262,8 @@
 
 (defn configure-node
   [nodedef]
-  (let [name (:name nodedef)]  
+  (let [name (:name nodedef)
+        role (:role nodedef)]  
     (if (contains? nodedef :nodes)
       (configure-nodes (:nodes nodedef)))))
 
@@ -344,3 +351,21 @@
     (let [response (String. (.recv socket))]
       (.close socket)
       response)))
+
+;; (run-task "configure" node-tree)
+;; lookup task
+;;   {:name "configure"
+;;    :exec "configure"}
+;; encode args
+;; call function configure
+;;   (configure node-tree)
+
+;; (run-task "task" arg1 arg2 argn)
+
+(defn run-task
+  "task|arg1|arg2|arg3"
+  [task-name & args]
+  (let [nodes (:nodes node-tree)
+        message (clojure.string/join "|" (cons task-name (map pr-str args)))]
+    message))
+
