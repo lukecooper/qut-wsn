@@ -76,19 +76,21 @@
 
 (defn call-task-fn
   ([task-def]
+     (println "starting" task-def)
      (apply (resolve (symbol "qut-wsn.task" (:call task-def))) (:params task-def)))
   ([task-def input]
+     (println "stating" task-def "with" input)
      (apply (resolve (symbol "qut-wsn.task" (:call task-def))) (cons input (:params task-def)))))
 
 (defn start-task
   [task-def publish-socket]
   (let [dependency (:depends task-def)
         repeat? (:repeat task-def)]
-    (loop []
+    (loop []      
       (->> (if (nil? dependency)
              (call-task-fn task-def)
              (call-task-fn task-def (wait-for dependency)))
-           (publish publish-socket (:name task-def)))
+           (publish publish-socket (:name task-def)))      
       (if repeat?
         (recur)))))
 
@@ -134,13 +136,26 @@
 (def task-defs
   {:record-audio
    {:call "record-audio"
-    :params [44800 16 2 "recordings"]
-    :repeat false}
+    :params [44800 16 2]
+    :repeat true}
+
+   :move-audio
+   {:call "move-file"
+    :params ["recordings"]
+    :depends "record-audio"
+    :repeat true}
    
    :spectrogram
    {:call "spectrogram"
     :params [256 0]
-    :depends "record-audio"}})
+    :depends "move-audio"
+    :repeat true}
+
+   :move-spectrogram
+   {:call "move-file"
+    :params ["spectrograms"]
+    :depends "spectrogram"
+    :repeat true}})
 
 (defn encode-task
   [task-name tasks & [params]]

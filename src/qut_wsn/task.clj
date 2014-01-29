@@ -1,18 +1,22 @@
 (ns qut-wsn.task
   (:gen-class)
+  
+  (:use [qut-wsn.control])
+  
   (:use [clojure.java.shell :only [sh]])
   (:use [clojure.string :only [trim]])
   (:use [clojure.contrib.math :only [abs]])
-  (:use [qut-wsn.control])
-  (:use [clj-time.core :only [interval in-millis]]
-        [clj-time.local :only [local-now]]
-        [clj-time.format :only [formatters unparse]]
-        [clj-time.coerce :only [to-long from-long]])
   (:use [clojure.java.io :only [file output-stream input-stream]])
-  (:import [com.musicg.wave Wave])
-  (:import [com.musicg.wave.extension Spectrogram])
+  
+  (:use [clj-time.core :only [interval in-millis]])
+  (:use [clj-time.local :only [local-now]])
+  (:use [clj-time.format :only [formatters unparse]])
+  (:use [clj-time.coerce :only [to-long from-long]])
+
   (:import [org.apache.commons.io FileUtils])
-  (:import [java.nio ByteBuffer]))
+  (:import [java.nio ByteBuffer])
+  (:import [com.musicg.wave Wave])
+  (:import [com.musicg.wave.extension Spectrogram]))
 
 (defn seconds-remaining
   "Returns the number of seconds (to three places) until the next minute begins for
@@ -27,16 +31,16 @@
   (.getPath (clojure.java.io/file filename)))
 
 (defn time-as-filepath
-  [folder the-time suffix]
+  [the-time suffix]
   (let [this-minute (.withMillisOfSecond (.withSecondOfMinute the-time 0) 0)
         time-formatter (formatters :date-hour-minute)]
-    (format "%s/%s.%s" folder (unparse time-formatter this-minute) suffix)))
+    (format "%s.%s" (unparse time-formatter this-minute) suffix)))
 
 (defn record-audio
-  [sample-rate bit-rate channels destination]
+  [sample-rate bit-rate channels]
   (let [time-now (local-now)
         duration (seconds-remaining time-now)
-        filename (time-as-filepath destination time-now "wav")
+        filename (time-as-filepath time-now "wav")
         command (format "rec -q -r %s -b %s -c %s %s trim 0 %s" sample-rate bit-rate channels filename duration)]
     (local-exec command)
     (filepath filename)))
@@ -45,13 +49,9 @@
 (defn spectrogram
   [filepath fft-sample-size overlap]
   (let [spec-filepath (clojure.string/replace filepath #"(\w+)\.(\w+)$" "$1.spec")]
-    (write-array spec-filepath (.getAbsoluteSpectrogramData (.getSpectrogram (Wave. filepath) fft-sample-size overlap)))))
-
-(defn spectrogram-old
-  [input-file fft-sample-size overlap]
-  (let [spectrogram-filepath (clojure.string/replace input-file #"(\w+)\.(\w+)$" "$1.spec")
-        spectrogram (.getSpectrogram (Wave. input-file) fft-sample-size overlap)]
-    (.getAbsoluteSpectrogramData spectrogram)))
+    (write-array spec-filepath
+                 (.getAbsoluteSpectrogramData (.getSpectrogram (Wave. filepath) fft-sample-size overlap)))
+    spec-filepath))
 
 (defn delta
   [[val & coll]]
@@ -60,21 +60,27 @@
     (+ (abs (- val (first coll)))
        (delta coll))))
 
-(defn aci
+;; this is incorrect, it is accumulating across frames
+;; whereas it should be across frequency bins, boo :(
+(defn calculate-aci
   [spectrogram]
   (into-array Double/TYPE
     (map (fn [frame]
            (let [sum (reduce + frame)
                  delta (delta frame)]
              (if (> sum 0) (/ delta sum))))
-     spectrogram)))
+         spectrogram)))
 
-(declare write-array)
-
-(defn write-spectrogram
-  [input-file spectrogram-data]
-  (let [spectrogram-filepath (clojure.string/replace input-file #"(\w+)\.(\w+)$" "$1.spec")]
-    (write-array spectrogram-data spectrogram-filepath)))
+(defn aci
+  [spec-filepath]
+  (let [aci-filepath (clojure.string/replace spec-filepath #"(\w+)\.(\w+)$" "$1.aci")]
+    (->> spec-filepath
+        (read-array)
+        ;(calculate-aci)
+        ;(write-array aci-filepath)
+        )
+    ;aci-filepath
+    ))
 
 (comment
   (defn archive
@@ -86,6 +92,11 @@
                                         ; delete oldest file
           )
         (recur (FileUtils/sizeOfDirectory (clojure.java.io/file archive-folder)))))))
+
+(defn move-file
+  [filepath destination]
+  (FileUtils/moveToDirectory (file filepath) (file destination) true)
+  (.getPath (file destination (.getName (file filepath)))))
 
 ; folder size eg. (FileUtils/sizeOfDirectory (clojure.java.io/file "/home/luke/uni"))
 
