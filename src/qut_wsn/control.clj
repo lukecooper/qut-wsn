@@ -18,7 +18,6 @@
                       hostname)]
     (last ((comp #(clojure.string/split % #"\s+") avahi-resolve mdns-hostname) lookup-name))))
 
-
 (defn put-path
   [local-path remote-path user remote-addr]
   (format "rsync -avz %s %s@%s:%s" local-path user remote-addr remote-path))

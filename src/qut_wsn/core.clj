@@ -1,187 +1,20 @@
 (ns qut-wsn.core
   (:gen-class)
-  (:import [org.jeromq ZMQ])
-  (:use [clojure.java.shell :only [sh]])
-  (:use [clojure.string :only [trim]])
-  (:use [clojure.contrib.math :only [abs]])
   (:use [qut-wsn.control])
-  (:use [clj-time.core :only [interval in-millis]]
-        [clj-time.local :only [local-now]]
-        [clj-time.format :only [formatters unparse]]
-        [clj-time.coerce :only [to-long from-long]])
-  (:use [clojure.java.io :only [file output-stream input-stream]])
-  (:import [com.musicg.wave Wave])
-  (:import [com.musicg.wave.extension Spectrogram])
-  (:import [org.apache.commons.io FileUtils])
-  (:import [java.nio ByteBuffer]))
+  (:use [qut-wsn.task])  
+  (:use [clojure.java.shell :only [sh]])
+  (:use [clojure.string :only [trim split join]])  
+  (:use [clojure.java.io :only [file]])
+  (:import [org.jeromq ZMQ])
+  (:import [org.apache.commons.io FileUtils]))
 
 (def ^:const task-listen-port 47687)
 (def ^:const task-publish-port 47688)
 (def ^:const status-listen-port 47689)
 
-(def sample-query
-  {:name "aci" ; acoustic complexity index
-   :id 234 ; added at runtime
-   :tasks [{:name "aci"
-            :exec "aci"
-            :depends "spectrogram-archive"
-            :query-name "aci" ; added at runtime
-            :query-id 234 ; added at runtime
-            }
-           {:name "aci-results"
-            :exec "results"
-            :params "[address port]" ; address and port to send results to
-            :depends "aci"
-            :query-name "aci" ; added at runtime
-            :query-id 234 ; added at runtime
-            }
-           {:name "aci-collate"
-            :exec "aci-collate"
-            :params "[port]" ; port to listen on for results
-            }]})
-
-(defn seconds-remaining
-  "Returns the number of seconds (to three places) until the next minute begins for
-   the given time."
-  [the-time]
-  (let [next-minute (.withMillisOfSecond (.withSecondOfMinute (.plusMinutes the-time 1) 0) 0)
-        record-time (in-millis (interval the-time next-minute))]
-    (/ record-time 1000.0)))
-
-(defn filepath
-  [filename]
-  (.getPath (clojure.java.io/file filename)))
-
-(defn time-as-filepath
-  [folder the-time suffix]
-  (let [this-minute (.withMillisOfSecond (.withSecondOfMinute the-time 0) 0)
-        time-formatter (formatters :date-hour-minute)]
-    (format "%s/%s.%s" folder (unparse time-formatter this-minute) suffix)))
-
-(defn record-audio
-  [sample-rate bit-rate channels destination]
-  (let [time-now (local-now)
-        duration (seconds-remaining time-now)
-        filename (time-as-filepath destination time-now "wav")
-        command (format "rec -q -r %s -b %s -c %s %s trim 0 %s" sample-rate bit-rate channels filename duration)]
-    (local-exec command)
-    (filepath filename)))
-
-(defn spectrogram
-  [input-file fft-sample-size overlap]
-  (let [spectrogram (.getSpectrogram (Wave. input-file) fft-sample-size overlap)]
-    (.getAbsoluteSpectrogramData spectrogram)))
-
-(defn delta
-  [[val & coll]]
-  (if (empty? coll)
-    val
-    (+ (abs (- val (first coll)))
-       (delta coll))))
-
-(defn aci
-  [spectrogram]
-  (into-array Double/TYPE
-    (map (fn [frame]
-           (let [sum (reduce + frame)
-                 delta (delta frame)]
-             (if (> sum 0) (/ delta sum))))
-     spectrogram)))
-
-(declare write-array)
-
-(defn write-spectrogram
-  [input-file spectrogram-data]
-  (let [spectrogram-filepath (clojure.string/replace input-file #"(\w+)\.(\w+)$" "$1.spec")]
-    (write-array spectrogram-data spectrogram-filepath)))
-
-(comment
-  (defn archive
-    [archive-folder max-folder-size filepath]
-    (let [folder-size (FileUtils/sizeOfDirectory (clojure.java.io/file archive-folder))
-          file-size (FileUtils/sizeOf (clojure.java.io/file filepath))]
-      (loop [folder-size (FileUtils/sizeOfDirectiry (clojure.java.io/file archive-folder))]
-        (if (> folder-size max-folder-size)
-                                        ; delete oldest file
-          )
-        (recur (FileUtils/sizeOfDirectory (clojure.java.io/file archive-folder)))))))
-
-; folder size eg. (FileUtils/sizeOfDirectory (clojure.java.io/file "/home/luke/uni"))
-
-(defn hidden-file?
-  [file]
-  (= (first (.getName file)) \.))
-
-(defn compare-files
-  [file1 file2]
-  (let [mod1 (from-long (.lastModified file1))
-        mod2 (from-long (.lastModified file2))]
-    (compare mod1 mod2)))
-
-(defn oldest-files
-  "Returns a list of files in folder sorted by oldest last modified time."
-  [folder]
-  (let [file-list (aclone (.listFiles (clojure.java.io/file folder)))]
-    (reverse (map #(.getPath %) (sort compare-files (filter #(not (hidden-file? %)) file-list))))))
-
-(defn write-array
-  [array filename]
-  (let [x-len (alength array)
-        y-len (alength (aget array 0))
-        buf-len (+ 4 4 (* x-len y-len 8))
-        byte-buffer (ByteBuffer/allocate buf-len)
-        buffer (byte-array buf-len)]
-    (do      
-      (.putInt byte-buffer x-len)
-      (.putInt byte-buffer y-len)
-      (doseq [x (range x-len)
-              y (range y-len)]
-        (.putDouble byte-buffer
-                    ; fully hinted for performace
-                    (let [#^doubles a (aget #^objects array x)]
-                      (aget a y))))
-      (.flip byte-buffer)
-      (.get byte-buffer buffer)
-      (with-open [out (output-stream (file filename))]
-        (.write out buffer)))))
-
-(defn read-array-size
-  [filename]
-  (with-open [in (input-stream filename)]
-    (let [buffer (byte-array 8)
-          read-bytes (.read in buffer 0 8)
-          byte-buffer (ByteBuffer/allocate read-bytes)]
-      (.put byte-buffer buffer 0 read-bytes)
-      (.flip byte-buffer)
-      (let [x-len (.getInt byte-buffer)
-            y-len (.getInt byte-buffer)]
-        [x-len y-len]))))
-
-(defn read-array
-  [filename]
-  (let [[x-len y-len] (read-array-size filename)
-        array (make-array Double/TYPE x-len y-len)]
-    (with-open [in (input-stream filename)]
-      (let [buffer-size (+ 4 4 (* x-len y-len 8))
-            buffer (byte-array buffer-size)
-            read-bytes (.read in buffer 0 buffer-size)
-            byte-buffer (ByteBuffer/allocate read-bytes)]
-        (.put byte-buffer buffer 0 read-bytes)
-        (.flip byte-buffer)
-        (.getInt byte-buffer) ; x-len
-        (.getInt byte-buffer) ; y-len
-        (doseq [x (range x-len)
-                y (range y-len)]
-          ; fully hinted for performance
-          (let [#^doubles a (aget #^objects array x)]
-            (aset a y (.getDouble byte-buffer))))
-        array))))
-
 (defn hostname
   []
   (trim (:out (sh "hostname"))))
-
-
 
 ;; on wsn-prime startup
 ;;   if config files exist
@@ -196,8 +29,6 @@
 ;;   receive configure task with node-def
 ;;   configure me
 ;;   execute configure task on my children
-
-
 
 (defn merge-addresses
   [node-def node-map]
@@ -219,59 +50,57 @@
 (def node-tree
   (read-network-conf "network-structure.clj" "hostname-lookup.clj"))
 
-
-(defn configure-node
-  [nodedef]
-  (let [name (:name nodedef)
-        role (:role nodedef)]  
-    (if (contains? nodedef :nodes)
-      (configure-nodes (:nodes nodedef)))))
-
-
-
 (def ctx (ZMQ/context 1))
 
 (defn append-filter
   [filter message]
-  (clojure.string/join (list filter ":" message)))
+  (join (list filter ":" message)))
 
 (defn remove-filter
   [message]
-  (second (clojure.string/split message #":" 2)))
+  (second (split message #":" 2)))
 
 (defn publish
-  [socket message filter]
+  [socket filter message]
   (.send socket (append-filter filter message)))
 
 (defn wait-for
-  [task]
+  [task-name]
   (let [socket (.socket ctx ZMQ/SUB)
-        filter (str task)]
-    (.connect socket "tcp://127.0.0.1:8888")
+        filter (str task-name)]
+    (.connect socket (format "tcp://%s:%s" (host-address "localhost") task-publish-port))
     (.subscribe socket filter)
     (let [message (String. (.recv socket))]
       (.close socket)
       (remove-filter message))))
 
-(defn exec-task
-  [task-defn]
-  (if (nil? (:depends task-defn))
-    ((:exec task-defn))
-    (let [input (wait-for (:depends task-defn))]
-      ((:exec task-defn) input))))
+(defn call-task-fn
+  ([task-def]
+     (apply (resolve (symbol "qut-wsn.task" (:call task-def))) (:params task-def)))
+  ([task-def input]
+     (apply (resolve (symbol "qut-wsn.task" (:call task-def))) (cons input (:params task-def)))))
 
-(defn run-task  
-  [task-defn publish-socket]
-  (loop []
-    (let [result (exec-task task-defn)]
-      (println result)
-      (publish publish-socket result (:name task-defn)))
-    (if (:repeat task-defn)
-      (recur))))
+(defn start-task
+  [task-def publish-socket]
+  (let [dependency (:depends task-def)
+        repeat? (:repeat task-def)]
+    (loop []
+      (->> (if (nil? dependency)
+             (call-task-fn task-def)
+             (call-task-fn task-def (wait-for dependency)))
+           (publish publish-socket (:name task-def)))
+      (if repeat?
+        (recur)))))
+
+(defn decode-task
+  [message]
+  (read-string message))
 
 (defn task-handler
   [publish message respond]
-  (.send respond (format "%s|OK" (hostname))))
+  (let [task-def (decode-task message)]
+    (future (start-task task-def publish))
+    (.send respond (String. "OK"))))
 
 (defn listener
   [address port handler]
@@ -287,45 +116,9 @@
     (.bind publish-socket (format "tcp://%s:%s" address port))
     publish-socket))
 
-(defn -main
-  [& args]
-  (let [local-address (qut-wsn.control/host-address "localhost")
-        publish-socket (publisher local-address task-publish-port)
-        task-listener (future (listener local-address task-listen-port (partial task-handler publish-socket)))]
-    (.addShutdownHook (Runtime/getRuntime)
-                      (Thread. (fn []
-                                 (.close publish-socket))))
-    (println "Started qut-wsn listener...")
-    @task-listener))
-
-(defn test-listener
-  []
-  (let [local-address (qut-wsn.control/host-address "localhost")
-        publish-socket (publisher local-address task-publish-port)]
-    (listener local-address task-listen-port (partial task-handler publish-socket))))
-
-(defn test-tasker
-  [hostname message]
-  (let [socket (.socket ctx ZMQ/REQ)]
-    (.connect socket (format "tcp://%s:%s" (qut-wsn.control/host-address hostname) task-listen-port))
-    (.send socket message)
-    (let [response (String. (.recv socket))]
-      (.close socket)
-      response)))
-
-;; (run-task "configure" node-tree)
-;; lookup task
-;;   {:name "configure"
-;;    :exec "configure"}
-;; encode args
-;; call function configure
-;;   (configure node-tree)
-
-;; (run-task "task" arg1 arg2 argn)
-
 (defn send-message
   "Synchronously sends a string message to the given address and returns the response."
-  [address port message]
+  [address port message]  
   (let [socket (.socket ctx ZMQ/REQ)
         sock-addr (format "tcp://%s:%s" address port)]
     (.connect socket sock-addr)
@@ -338,11 +131,47 @@
   [responses]
   responses)
 
+(def task-defs
+  {:record-audio
+   {:call "record-audio"
+    :params [44800 16 2 "recordings"]
+    :repeat false}
+   
+   :spectrogram
+   {:call "spectrogram"
+    :params [256 0]
+    :depends "record-audio"}})
+
+(defn encode-task
+  [task-name tasks & [params]]
+  (let [task-def ((keyword task-name) tasks)]
+    (-> (if (empty? params)
+          (merge task-def {:name task-name})
+          (merge task-def {:name task-name :params params}))
+        (pr-str))))
+
 (defn run-task
-  "task|arg1|arg2|arg3"
   [task-name & args]
-  (let [nodes (:nodes node-tree)
-        message (clojure.string/join "|" (cons task-name (map pr-str args)))]
-    (-> (map (fn [node-def] (send-message (:address node-def) task-listen-port message)) nodes)
+  (let [message (encode-task task-name task-defs (vec args))]
+    (-> (map (fn [node-def]
+               (send-message (:address node-def) task-listen-port message))
+             (:nodes node-tree))
         (check-responses))))
 
+
+
+
+
+
+
+
+(defn -main
+  [& args]
+  (let [local-address (host-address "localhost")
+        publish-socket (publisher local-address task-publish-port)
+        task-listener (future (listener local-address task-listen-port (partial task-handler publish-socket)))]
+    (.addShutdownHook (Runtime/getRuntime)
+                      (Thread. (fn []
+                                 (.close publish-socket))))
+    (println "Started qut-wsn listener...")
+    @task-listener))

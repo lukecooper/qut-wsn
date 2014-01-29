@@ -11,5 +11,5 @@
                  [antler/commons-io "2.2.0"]
                  [com.musicg/musicg "1.4.2.0"]]
   :repositories {"project" "file:repository"}
-  :main qut-wsn.core
-  :profiles {:uberjar {:aot :all}})
+  :profiles {:uberjar {:aot :all}}
+  :main qut-wsn.core)
