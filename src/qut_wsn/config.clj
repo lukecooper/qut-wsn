@@ -41,5 +41,11 @@
 (defn lookup-role
   [hostname host-tree]
   (let [host (find-host hostname host-tree)]
-    (if ((comp not nil?) host)
+    (if-not (nil? host)
       (host :role))))
+
+(defn lookup-nodes
+  [hostname host-tree]
+  (let [host (find-host hostname host-tree)]
+    (if-not (nil? host)
+      (host :nodes))))

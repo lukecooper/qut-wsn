@@ -111,33 +111,28 @@
 ;;
 
 (defn run-query
-  ([query]
-     (run-query query nil))
-  ([query publish]
-     (let [role (lookup-role (hostname) node-tree)
-           tasks (query (keyword role))]
-       (println "tasks" tasks))))
-
-(defn decode-message
-  [message]
-  (read-string message))
-
-(defn dispatch
-  [publish-socket message response-socket]
-  (let [query (decode-message message)]
-    (if (not (nil? query)) ;; validate query
-      (do
-        (future (run-query query (partial publish publish-socket)))
-        (.send response-socket (String. "OK")))
-      (.send response-socket (String. "NOT FOUND")))))
+  [query publish]
+  (let [role (lookup-role (hostname) node-tree)
+        tasks (query (keyword role))]
+    (when (= role "sensor")
+      (doall (map #(sensor-task % publish) tasks)))
+    (when (= role "collector")
+      ;; set up collector tasks
+      (let [nodes (lookup-nodes (hostname) node-tree)
+            message (pr-str query)]
+        (map (fn [node] (send-message (:address node) listen-port message)) nodes)))))
 
 (defn listen
-  [address port dispatch]
+  [address port publish-socket]
   (let [listen-socket (.socket ctx ZMQ/REP)]
     (.bind listen-socket (format "tcp://%s:%s" address port))
-    (loop [message (String. (.recv listen-socket))]
-      (dispatch message listen-socket)
-      (recur (String. (.recv listen-socket))))))
+    (loop [query (read-string (String. (.recv listen-socket)))]
+      (if-not (nil? query)
+        (do
+          (future (run-query query (partial publish publish-socket)))
+          (.send listen-socket (String. "ok")))
+        (.send listen-socket (String. "not found")))
+      (recur (decode-message (String. (.recv listen-socket)))))))
 
 (defn make-publish-socket
   [address port]
@@ -153,7 +148,7 @@
                       (Thread. (fn []
                                  (.close publish-socket))))
     (println "Started qut-wsn...")
-    (listen local-address listen-port (partial dispatch publish-socket))))
+    (listen local-address listen-port publish-socket)))
 
 ;;
 ;; SENDER
@@ -174,21 +169,20 @@
       (.close socket)
       response)))
 
-(defn encode-message
-  [query & [params]]
-  (let [query-def (find-by-name query queries)]
-    (comment
-      (-> (if (empty? params)
-            (merge query-def {:name task-name})
-            (merge task-def {:name task-name :params params}))
-          (pr-str)))
-    (pr-str query-def)))
-
 (comment
-  (defn run-task
-    [task-name & args]
-    (let [message (encode-message task-name task-defs (vec args))]
-      (-> (map (fn [node-def]
-                 (send-message (:address node-def) listen-port message))
-               (:nodes node-tree))
-          (check-responses)))))
+  ;; left this here as an example of param passing
+  (defn encode-message
+    [query & [params]]
+    (let [query-def (find-by-name query queries)]
+      (comment
+        (-> (if (empty? params)
+              (merge query-def {:name task-name})
+              (merge task-def {:name task-name :params params}))
+            (pr-str)))
+      (pr-str query-def))))
+
+(defn run-query
+  [query-name]
+  (let [query (find-by-name query-name queries)]
+    (when-not (nil? query)
+      (run-query query nil))))
