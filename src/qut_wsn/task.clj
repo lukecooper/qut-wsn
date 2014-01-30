@@ -71,6 +71,7 @@
              (if (> sum 0) (/ delta sum))))
          spectrogram)))
 
+(declare read-array)
 (defn aci
   [spec-filepath]
   (let [aci-filepath (clojure.string/replace spec-filepath #"(\w+)\.(\w+)$" "$1.aci")]

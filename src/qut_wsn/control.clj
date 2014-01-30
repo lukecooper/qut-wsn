@@ -1,7 +1,13 @@
 (ns qut-wsn.control
   (:gen-class)
-  (:import [org.jeromq ZMQ])
-  (:require [clj-ssh.ssh :as ssh]))
+  (:use [clojure.string :only [trim lower-case]])
+  (:use [clojure.java.shell :only [sh]])
+  (:use [clj-ssh.ssh :as ssh])
+  (:import [org.jeromq ZMQ]))
+
+(defn hostname
+  []
+  ((comp trim lower-case) (:out (clojure.java.shell/sh "hostname"))))
 
 (defn mdns-hostname
   [hostname]
@@ -9,7 +15,7 @@
 
 (defn avahi-resolve
   [hostname]
-  (:out (clojure.java.shell/sh "avahi-resolve-host-name" "-4" hostname)))
+  (:out (sh "avahi-resolve-host-name" "-4" hostname)))
 
 (defn host-address
   [hostname]
