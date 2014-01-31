@@ -17,9 +17,10 @@ runscript="pushd ${targetdir}; java -cp ${libdir}/\*:${jarname} qut_wsn.core; po
 # kill running process
 ssh -l $user $address ${killscript}
 
-# copy new jar
+# copy new jar and config files
 lein jar
 scp $jarfile $user@$address:$targetdir
+scp *.clj $user@$address:$targetdir
 
 # restart
 ssh -l $user $address ${runscript} 

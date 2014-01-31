@@ -11,12 +11,16 @@
   (:use [clj-time.core :only [interval in-millis]])
   (:use [clj-time.local :only [local-now]])
   (:use [clj-time.format :only [formatters unparse]])
-  (:use [clj-time.coerce :only [to-long from-long]])
-
-  (:import [org.apache.commons.io FileUtils])
-  (:import [java.nio ByteBuffer])
+  (:use [clj-time.coerce :only [to-long from-long]])  
+  
   (:import [com.musicg.wave Wave])
-  (:import [com.musicg.wave.extension Spectrogram]))
+  (:import [com.musicg.wave.extension Spectrogram])
+  (:import [com.musicg.graphic GraphicRender])
+  (:import [edu.qut.wsn ACI])
+  (:import [java.nio ByteBuffer])
+  (:import [org.apache.commons.io FileUtils])
+
+  (:require [taoensso.nippy :as nippy]))
 
 (defn seconds-remaining
   "Returns the number of seconds (to three places) until the next minute begins for
@@ -29,6 +33,10 @@
 (defn filepath
   [filename]
   (.getPath (clojure.java.io/file filename)))
+
+(defn replace-ext
+  [filepath ext]
+  (clojure.string/replace filepath #"(\w+)\.(\w+)$" (str "$1." ext)))
 
 (defn time-as-filepath
   [the-time suffix]
@@ -45,43 +53,28 @@
     (local-exec command)
     (filepath filename)))
 
-(declare write-array)
 (defn spectrogram
-  [filepath fft-sample-size overlap]
-  (let [spec-filepath (clojure.string/replace filepath #"(\w+)\.(\w+)$" "$1.spec")]
-    (write-array spec-filepath
-                 (.getAbsoluteSpectrogramData (.getSpectrogram (Wave. filepath) fft-sample-size overlap)))
-    spec-filepath))
+  [wave-filepath fft-sample-size overlap]
+  (let [spec-data (.getNormalizedSpectrogramData (.getSpectrogram (Wave. wave-filepath) fft-sample-size overlap))]            
+    (with-open [out (output-stream (file (replace-ext wave-filepath "spec")))]      
+      (.write out (nippy/freeze spec-data))))
+  (replace-ext wave-filepath "spec"))
 
-(defn delta
-  [[val & coll]]
-  (if (empty? coll)
-    val
-    (+ (abs (- val (first coll)))
-       (delta coll))))
+(defn render-spectrogram
+  [spec-filepath]
+  (let [buffer (byte-array (.length (file spec-filepath)))]
+    (with-open [in (input-stream (file spec-filepath))]
+      (.read in buffer))
+    (.renderSpectrogramData (GraphicRender.) (nippy/thaw buffer) (replace-ext spec-filepath "png"))))
 
-;; this is incorrect, it is accumulating across frames
-;; whereas it should be across frequency bins, boo :(
-(defn calculate-aci
-  [spectrogram]
-  (into-array Double/TYPE
-    (map (fn [frame]
-           (let [sum (reduce + frame)
-                 delta (delta frame)]
-             (if (> sum 0) (/ delta sum))))
-         spectrogram)))
-
-(declare read-array)
 (defn aci
   [spec-filepath]
-  (let [aci-filepath (clojure.string/replace spec-filepath #"(\w+)\.(\w+)$" "$1.aci")]
-    (->> spec-filepath
-        (read-array)
-        ;(calculate-aci)
-        ;(write-array aci-filepath)
-        )
-    ;aci-filepath
-    ))
+  (let [buffer (byte-array (.length (file spec-filepath)))]
+    (with-open [in (input-stream (file spec-filepath))]
+      (.read in buffer))    
+    (with-open [out (output-stream (file (replace-ext spec-filepath "aci")))]
+      (.write out (nippy/freeze (ACI/calculateACI (nippy/thaw buffer)))))
+    (replace-ext spec-filepath "aci")))
 
 (comment
   (defn archive
@@ -116,56 +109,3 @@
   [folder]
   (let [file-list (aclone (.listFiles (clojure.java.io/file folder)))]
     (reverse (map #(.getPath %) (sort compare-files (filter #(not (hidden-file? %)) file-list))))))
-
-(defn write-array
-  [filepath array]
-  (let [x-len (alength array)
-        y-len (alength (aget array 0))
-        buf-len (+ 4 4 (* x-len y-len 8))
-        byte-buffer (ByteBuffer/allocate buf-len)
-        buffer (byte-array buf-len)]
-    (do      
-      (.putInt byte-buffer x-len)
-      (.putInt byte-buffer y-len)
-      (doseq [x (range x-len)
-              y (range y-len)]
-        (.putDouble byte-buffer
-                    ; fully hinted for performace
-                    (let [#^doubles a (aget #^objects array x)]
-                      (aget a y))))
-      (.flip byte-buffer)
-      (.get byte-buffer buffer)
-      (with-open [out (output-stream (file filepath))]
-        (.write out buffer)))))
-
-(defn read-array-size
-  [filepath]
-  (with-open [in (input-stream filepath)]
-    (let [buffer (byte-array 8)
-          read-bytes (.read in buffer 0 8)
-          byte-buffer (ByteBuffer/allocate read-bytes)]
-      (.put byte-buffer buffer 0 read-bytes)
-      (.flip byte-buffer)
-      (let [x-len (.getInt byte-buffer)
-            y-len (.getInt byte-buffer)]
-        [x-len y-len]))))
-
-(defn read-array
-  [filepath]
-  (let [[x-len y-len] (read-array-size filepath)
-        array (make-array Double/TYPE x-len y-len)]
-    (with-open [in (input-stream filepath)]
-      (let [buffer-size (+ 4 4 (* x-len y-len 8))
-            buffer (byte-array buffer-size)
-            read-bytes (.read in buffer 0 buffer-size)
-            byte-buffer (ByteBuffer/allocate read-bytes)]
-        (.put byte-buffer buffer 0 read-bytes)
-        (.flip byte-buffer)
-        (.getInt byte-buffer) ; x-len
-        (.getInt byte-buffer) ; y-len
-        (doseq [x (range x-len)
-                y (range y-len)]
-          ; fully hinted for performance
-          (let [#^doubles a (aget #^objects array x)]
-            (aset a y (.getDouble byte-buffer))))
-        array))))

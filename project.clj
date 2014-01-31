@@ -9,7 +9,10 @@
                  [clj-ssh "0.5.7"]
                  [clj-time "0.6.0"]
                  [antler/commons-io "2.2.0"]
-                 [com.musicg/musicg "1.4.2.0"]]
+                 [com.musicg/musicg "1.4.2.0"]
+                 [com.taoensso/timbre "3.0.0"]
+                 [com.taoensso/nippy "2.5.2"]]
+  :java-source-paths ["java/src"]
   :repositories {"project" "file:repository"}
   :profiles {:uberjar {:aot :all}}
   :main qut-wsn.core)

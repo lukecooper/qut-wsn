@@ -7,7 +7,13 @@
   (:use [clojure.java.shell :only [sh]])
   (:use [clojure.string :only [trim split join]])
   (:import [org.jeromq ZMQ])
-  (:import [org.apache.commons.io FileUtils]))
+  (:import [org.apache.commons.io FileUtils])
+  (:require [taoensso.timbre :as timbre]))
+
+;; include logging
+(timbre/refer-timbre)
+(timbre/set-config! [:appenders :spit :enabled?] true)
+(timbre/set-config! [:shared-appender-config :spit-filename] "log/wsn.log")
 
 ;; default zeromq context for this app
 (def ctx (ZMQ/context 1))
@@ -22,24 +28,29 @@
   [{:name "record"
     :repeat true
     :steps [{:call "record-audio"
-             :params [44800 16 2]}
+             :params [44800 16 1]}
             {:call "move-file"
              :params ["recordings"]}]}
    
    {:name "spectrogram"
     :input "record"
     :repeat true
-    :steps [{:call "calculate-spectrogram"
-             :params [256 0]}
+    :steps [{:call "spectrogram"
+             :params [1024 0]}
             {:call "move-file"
              :params ["spectrograms"]}]}
 
    {:name "aci"
     :input "spectrogram"
     :repeat true
-    :steps [{:call "calculate-aci"}
+    :steps [{:call "aci"}
             {:call "move-file"
              :params ["aci"]}]}
+
+   {:name "render-spectrogram"
+    :input "spectrogram"
+    :repeat true
+    :steps [{:call "render-spectrogram"}]}
 
    {:name "render-aci"
     :input "aci"
@@ -51,8 +62,12 @@
 
 (def queries
   [{:name "aci"
-    :sensor ["record" "spectrogram" "aci"]
+    :sensor ["record" "spectrogram" "render-spectrogram" "aci"]
     :collector ["render-aci"]}])
+
+;;
+;; RECIPIENT
+;;
 
 (defn append-filter
   [filter message]
@@ -64,22 +79,28 @@
 
 (defn publish
   [socket source message]
-  (.send socket (append-filter source message)))
+  (dosync
+   (info "Publishing result from" source message)
+   (.send socket (append-filter source message))))
 
 (defn wait-for
   [task-name]
-  (let [socket (.socket ctx ZMQ/SUB)
-        filter (str task-name)]
-    (.connect socket (format "tcp://%s:%s" (host-address "localhost") publish-port))
-    (.subscribe socket filter)
-    (let [message (String. (.recv socket))]
-      (.close socket)
-      (remove-filter message))))
+  (if-not (nil? task-name)
+    (let [socket (.socket ctx ZMQ/SUB)
+          filter (str task-name)]
+      (.connect socket (format "tcp://%s:%s" (host-address "localhost") publish-port))
+      (.subscribe socket filter)
+      (info "Waiting for" filter)
+      (let [message (String. (.recv socket))]
+        (info "Message received" message)
+        (.close socket)
+        (remove-filter message)))))
 
 (defn call-step
   ([step]
      (call-step nil step))
   ([input step]
+     (info "Calling step" step "with input" input)
      (let [partial-step (partial (resolve (symbol "qut-wsn.task" (step :call))))]
        (if (nil? input)
          (apply partial-step (step :params))
@@ -89,44 +110,62 @@
   [name coll]
   (first (filter #(= (:name %) name) coll)))
 
-(defn wait-for2
-  [task]
-  nil)
-
 (defn sensor-task
   [task-name publish]
   (let [task (find-by-name task-name tasks)
         steps (task :steps)]
-    (loop [input (wait-for2 (task :input))]
+    (loop [input (wait-for (task :input))]
+      (info "Executing task" task "with input" input)
       (publish (task :name)
                (if (empty? (rest steps))
                  (call-step input (first steps))
                  (reduce call-step input steps)))
       (if (task :repeat)
-        (recur (wait-for2 (task :input)))))))
+        (recur (wait-for (task :input)))))))
 
+(declare send-message)
+(declare decode-message)
 
-;;
-;; RECIPIENT
-;;
+(defonce publish-socket (ref nil))
+
+(defn bind-publish-socket
+  [address port]
+  (when (nil? @publish-socket)
+    (info "publish-socket nil")
+    (dosync
+     (ref-set publish-socket (.socket ctx ZMQ/PUB))
+     (.bind @publish-socket (format "tcp://%s:%s" address port)))))
 
 (defn run-query
-  [query publish]
-  (let [role (lookup-role (hostname) node-tree)
-        tasks (query (keyword role))]
-    (when (= role "sensor")
-      (doall (map #(sensor-task % publish) tasks)))
-    (when (= role "collector")
-      ;; set up collector tasks
-      (let [nodes (lookup-nodes (hostname) node-tree)
-            message (pr-str query)]
-        (map (fn [node] (send-message (:address node) listen-port message)) nodes)))))
+  ;; controller version
+  ([query-name]
+     (bind-publish-socket (host-address "localhost") publish-port)
+     (let [query (find-by-name query-name queries)]
+       (when-not (nil? query)
+         (run-query query @publish-socket))))
+  
+  ;; node version
+  ([query publish]
+     (info "Run" query "with publish" (str publish))
+     (let [role (lookup-role (hostname) node-tree)
+           tasks (query (keyword role))]
+       (when (= role "sensor")
+         (info "Sensor running tasks" tasks)
+         (doall (pmap #(sensor-task % publish) tasks)))
+       (when (= role "collector")
+         ;; set up collector tasks         
+         (let [nodes (lookup-nodes (hostname) node-tree)
+               message (pr-str query)]
+           (info "Collector sending query to nodes" nodes "message" message)
+           (doall (pmap (fn [node] (send-message (:address node) listen-port message)) nodes)))))))
 
 (defn listen
   [address port publish-socket]
   (let [listen-socket (.socket ctx ZMQ/REP)]
+    (info "Binding to" address port)
     (.bind listen-socket (format "tcp://%s:%s" address port))
     (loop [query (read-string (String. (.recv listen-socket)))]
+      (info "Received query" (str query))
       (if-not (nil? query)
         (do
           (future (run-query query (partial publish publish-socket)))
@@ -134,21 +173,15 @@
         (.send listen-socket (String. "not found")))
       (recur (decode-message (String. (.recv listen-socket)))))))
 
-(defn make-publish-socket
-  [address port]
-  (let [publish-socket (.socket ctx ZMQ/PUB)]
-    (.bind publish-socket (format "tcp://%s:%s" address port))
-    publish-socket))
-
 (defn -main
   [& args]
-  (let [local-address (host-address "localhost")
-        publish-socket (make-publish-socket local-address publish-port)]
+  (let [local-address (host-address "localhost")]
+    (bind-publish-socket local-address publish-port)
     (.addShutdownHook (Runtime/getRuntime)
                       (Thread. (fn []
-                                 (.close publish-socket))))
-    (println "Started qut-wsn...")
-    (listen local-address listen-port publish-socket)))
+                                 (dosync (.close @publish-socket)))))
+    (info "Started qut-wsn...")
+    (listen local-address listen-port @publish-socket)))
 
 ;;
 ;; SENDER
@@ -160,29 +193,15 @@
 
 (defn send-message
   "Synchronously sends a string message to the given address and returns the response."
-  [address port message]  
+  [address port message]
+  (info "Send message")
   (let [socket (.socket ctx ZMQ/REQ)
         sock-addr (format "tcp://%s:%s" address port)]
+    (info "Connecting to" address ":" port)
     (.connect socket sock-addr)
+    (info "Sending" message)
     (.send socket message)
     (let [response (String. (.recv socket))]
+      (info "Response" response)
       (.close socket)
       response)))
-
-(comment
-  ;; left this here as an example of param passing
-  (defn encode-message
-    [query & [params]]
-    (let [query-def (find-by-name query queries)]
-      (comment
-        (-> (if (empty? params)
-              (merge query-def {:name task-name})
-              (merge task-def {:name task-name :params params}))
-            (pr-str)))
-      (pr-str query-def))))
-
-(defn run-query
-  [query-name]
-  (let [query (find-by-name query-name queries)]
-    (when-not (nil? query)
-      (run-query query nil))))
