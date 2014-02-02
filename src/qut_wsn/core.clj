@@ -22,6 +22,9 @@
 (def ^:const listen-port  47687)
 (def ^:const publish-port 47688)
 
+;; publish socket for this host
+(defonce publish-socket (ref nil))
+
 (def node-tree (load-config))
 
 (def tasks
@@ -101,32 +104,75 @@
      (call-step nil step))
   ([input step]
      (info "Calling step" step "with input" input)
-     (let [partial-step (partial (resolve (symbol "qut-wsn.task" (step :call))))]
-       (if (nil? input)
-         (apply partial-step (step :params))
-         (apply partial-step (cons input (step :params)))))))
+     (let [partial-step (partial (resolve (symbol "qut-wsn.task" (step :call))))]              
+       (apply partial-step (concat (filter (comp not nil?) ((comp flatten vector) input))
+                                   (step :params))))))
 
 (defn find-by-name
   [name coll]
   (first (filter #(= (:name %) name) coll)))
 
+(defn run-steps
+  [input steps]
+  (if (empty? (rest steps))
+    (call-step input (first steps))
+    (reduce call-step input steps)))
+
 (defn sensor-task
   [task-name publish]
-  (let [task (find-by-name task-name tasks)
-        steps (task :steps)]
+  (let [task (find-by-name task-name tasks)]
     (loop [input (wait-for (task :input))]
       (info "Executing task" task "with input" input)
-      (publish (task :name)
-               (if (empty? (rest steps))
-                 (call-step input (first steps))
-                 (reduce call-step input steps)))
+      (publish (task :name) (run-steps input (task :steps)))
       (if (task :repeat)
         (recur (wait-for (task :input)))))))
 
 (declare send-message)
+
+;; dispatch run-query on the role of the current host
+(defmulti run-query (fn [query publish] (lookup-role (hostname) node-tree)))
+
+(defmethod run-query "sensor"
+  [query publish]
+  ;; forward query to child nodes
+  (doall (pmap (fn [node] (send-message (:address node) listen-port (pr-str query)))
+               (lookup-nodes (hostname) node-tree)))
+  ;; run sensor tasks
+  (doall (pmap #(sensor-task % publish) (query :sensor))))
+
+(defmethod run-query "collector"
+  [query publish]
+  ;; forward query to child nodes
+  (doall (pmap (fn [node] (send-message (:address node) listen-port (pr-str query)))
+               (lookup-nodes (hostname) node-tree)))
+  ;; run collector tasks
+  ;; (doall (pmap #(collector-task % publish) (query :sensor)))
+  )
+
 (declare decode-message)
 
-(defonce publish-socket (ref nil))
+(defn listen-for-query
+  [address port publish-socket]
+  (let [listen-socket (.socket ctx ZMQ/REP)]    
+    (.bind listen-socket (format "tcp://%s:%s" address port))
+    (info "Listening for queries")
+    (loop [query (read-string (String. (.recv listen-socket)))]
+      (info "Received query" (str query))            
+      (future (run-query query (partial publish publish-socket)))
+      (.send listen-socket (String. "ok"))      
+      (recur (decode-message (String. (.recv listen-socket)))))))
+
+(defn listen-for-result
+  [host port publish-socket]
+  (let [listen-socket (.socket ctx ZMQ/SUB)]    
+    (.connect listen-socket (format "tcp://%s:%s" (host-address host) publish-port))
+    (.subscribe listen-socket "")
+    (info "Listening to" host "for results")
+    (loop [result (String. (.recv listen-socket))]
+      (info "Result from" host result)
+      (let [[filter message] (split result #":" 2)]
+        (publish publish-socket filter (join [host ":" message])))
+      (recur (String. (.recv listen-socket))))))
 
 (defn bind-publish-socket
   [address port]
@@ -136,52 +182,18 @@
      (ref-set publish-socket (.socket ctx ZMQ/PUB))
      (.bind @publish-socket (format "tcp://%s:%s" address port)))))
 
-(defn run-query
-  ;; controller version
-  ([query-name]
-     (bind-publish-socket (host-address "localhost") publish-port)
-     (let [query (find-by-name query-name queries)]
-       (when-not (nil? query)
-         (run-query query @publish-socket))))
-  
-  ;; node version
-  ([query publish]
-     (info "Run" query "with publish" (str publish))
-     (let [role (lookup-role (hostname) node-tree)
-           tasks (query (keyword role))]
-       (when (= role "sensor")
-         (info "Sensor running tasks" tasks)
-         (doall (pmap #(sensor-task % publish) tasks)))
-       (when (= role "collector")
-         ;; set up collector tasks         
-         (let [nodes (lookup-nodes (hostname) node-tree)
-               message (pr-str query)]
-           (info "Collector sending query to nodes" nodes "message" message)
-           (doall (pmap (fn [node] (send-message (:address node) listen-port message)) nodes)))))))
-
-(defn listen
-  [address port publish-socket]
-  (let [listen-socket (.socket ctx ZMQ/REP)]
-    (info "Binding to" address port)
-    (.bind listen-socket (format "tcp://%s:%s" address port))
-    (loop [query (read-string (String. (.recv listen-socket)))]
-      (info "Received query" (str query))
-      (if-not (nil? query)
-        (do
-          (future (run-query query (partial publish publish-socket)))
-          (.send listen-socket (String. "ok")))
-        (.send listen-socket (String. "not found")))
-      (recur (decode-message (String. (.recv listen-socket)))))))
-
 (defn -main
   [& args]
+  (info "Starting")
   (let [local-address (host-address "localhost")]
     (bind-publish-socket local-address publish-port)
     (.addShutdownHook (Runtime/getRuntime)
                       (Thread. (fn []
-                                 (dosync (.close @publish-socket)))))
-    (info "Started qut-wsn...")
-    (listen local-address listen-port @publish-socket)))
+                                 (dosync (.close @publish-socket)))))    
+    (doall (pmap (fn [node]                   
+                   (future (listen-for-result (node :name) publish-port @publish-socket)))
+                 (lookup-nodes (hostname) node-tree)))    
+    (listen-for-query local-address listen-port @publish-socket)))
 
 ;;
 ;; SENDER
@@ -205,3 +217,19 @@
       (info "Response" response)
       (.close socket)
       response)))
+
+(defn map-query
+  [query-name]  
+  (bind-publish-socket (host-address "localhost") publish-port)
+  (let [query (find-by-name query-name queries)
+        listeners (doall (pmap (fn [node] (future (listen-for-result (node :name) publish-port @publish-socket)))
+                               (lookup-nodes (hostname) node-tree)))]
+    (when-not (nil? query)
+      (run-query query @publish-socket))
+    listeners))
+
+(defn cancel-listeners
+  [listeners]
+  (doall  (pmap future-cancel listeners)))
+
+

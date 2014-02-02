@@ -1,3 +1,4 @@
 ;; Host configuration
-{:tatooine    {:user "luke" :address "10.27.142.150"}
- :debianvm    {:user "luke" :address "10.27.142.128"}}
+{:larry       {:user "luke" :address "192.168.0.2"}
+ :debian      {:user "luke" :address "192.168.0.18"}
+ :qut-rpi-001 {:user "pi"   :address "192.168.0.12"}}

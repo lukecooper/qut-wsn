@@ -1,5 +1,5 @@
 ;; Network structure with role assignments
-{:name "tatooine"
+{:name "larry"
  :role "collector"
- :nodes [{:name "debianvm"
+ :nodes [{:name "debian"
           :role "sensor"}]}

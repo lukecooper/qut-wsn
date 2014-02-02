@@ -65,7 +65,8 @@
   (let [buffer (byte-array (.length (file spec-filepath)))]
     (with-open [in (input-stream (file spec-filepath))]
       (.read in buffer))
-    (.renderSpectrogramData (GraphicRender.) (nippy/thaw buffer) (replace-ext spec-filepath "png"))))
+    (.renderSpectrogramData (GraphicRender.) (nippy/thaw buffer) (replace-ext spec-filepath "png")))
+  (replace-ext spec-filepath "png"))
 
 (defn aci
   [spec-filepath]
