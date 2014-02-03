@@ -6,7 +6,7 @@
   
   (:use [clojure.java.shell :only [sh]])
   (:use [clojure.string :only [trim]])
-  (:use [clojure.contrib.math :only [abs]])
+  (:use [clojure.contrib.math :only [abs ceil]])
   (:use [clojure.java.io :only [file output-stream input-stream]])
   
   (:use [clj-time.core :only [interval in-millis]])
@@ -22,14 +22,12 @@
   (:import [org.apache.commons.io FileUtils])
 
   (:require [taoensso.nippy :as nippy])
-
   (:require [taoensso.timbre :as timbre]))
 
 ;; include logging
 (timbre/refer-timbre)
 (timbre/set-config! [:appenders :spit :enabled?] true)
 (timbre/set-config! [:shared-appender-config :spit-filename] "log/wsn.log")
-
 
 (defn seconds-remaining
   "Returns the number of seconds (to three places) until the next minute begins for
@@ -53,18 +51,36 @@
         time-formatter (formatters :date-hour-minute)]
     (format "%s.%s" (unparse time-formatter this-minute) suffix)))
 
+(defn time-as-seconds
+  [the-time]
+  (/ (.get (.millisOfDay the-time)) 1000.0))
+
 (defn record-audio
   [sample-rate bit-rate channels]
   (let [time-now (local-now)
-        duration (seconds-remaining time-now)
-        filename (time-as-filepath time-now "wav")
-        command (format "rec -q -r %s -b %s -c %s %s trim 0 %s" sample-rate bit-rate channels filename duration)]
-    (local-exec command)
+        filename (time-as-filepath time-now "wav")]
+    (local-exec (format "rec -q -r %s -b %s -c %s %s trim 0 %s"
+                        sample-rate bit-rate channels filename
+                        (seconds-remaining time-now)))
+    (filepath filename)))
+
+(defn fake-record-audio
+  [source sample-rate bit-rate channels]
+  (let [time-now (local-now)
+        filename (time-as-filepath time-now "wav")]
+    (info (time-as-seconds time-now))
+    (info (seconds-remaining time-now))
+    (local-exec (format "sox  -r %s -b %s -c %s %s %s trim %s %s"
+                        sample-rate bit-rate channels source filename
+                        (time-as-seconds time-now)
+                        (seconds-remaining time-now)))
+    (Thread/sleep (* (seconds-remaining (local-now)) 1000.0))
     (filepath filename)))
 
 (defn spectrogram
   [wave-filepath fft-sample-size overlap]
-  (let [spec-data (.getNormalizedSpectrogramData (.getSpectrogram (Wave. wave-filepath) fft-sample-size overlap))]            
+  (let [spec-data (.getNormalizedSpectrogramData
+                   (.getSpectrogram (Wave. wave-filepath) fft-sample-size overlap))]
     (with-open [out (output-stream (file (replace-ext wave-filepath "spec")))]      
       (.write out (nippy/freeze spec-data))))
   (replace-ext wave-filepath "spec"))
@@ -86,16 +102,29 @@
       (.write out (nippy/freeze (ACI/calculateACI (nippy/thaw buffer)))))
     (replace-ext spec-filepath "aci")))
 
-(comment
-  (defn archive
-    [archive-folder max-folder-size filepath]
-    (let [folder-size (FileUtils/sizeOfDirectory (clojure.java.io/file archive-folder))
-          file-size (FileUtils/sizeOf (clojure.java.io/file filepath))]
-      (loop [folder-size (FileUtils/sizeOfDirectiry (clojure.java.io/file archive-folder))]
-        (if (> folder-size max-folder-size)
-                                        ; delete oldest file
-          )
-        (recur (FileUtils/sizeOfDirectory (clojure.java.io/file archive-folder)))))))
+(defn list-files-by-age
+  [directory]
+  (clojure.string/split (local-exec (format "ls -cr %s" directory)) #"\n"))
+
+(defn directory-size
+  [directory]
+  (let [result (re-seq #"[0-9]+" (local-exec (format "du -S --summarize %s" directory)))
+        kb-size (if-not (nil? result) (read-string (first result)) 0)]
+    (if (> kb-size 0)
+      (int (ceil (/ kb-size 1000.0)))
+      0)))
+
+(defn cleanup-directory
+  [directory size-limit]
+  (let [file-list (list-files-by-age directory)]
+    (loop [[oldest & remainder] file-list]
+      (when (and (not (nil? oldest))
+                 (> (directory-size directory) size-limit))
+        (let [file-to-delete (file directory oldest)]
+          (when (.isFile file-to-delete)
+            (info "Deleting file" (.getPath file-to-delete))
+            (.delete file-to-delete)))
+        (recur remainder)))))
 
 (defn move-file
   [filepath destination]
@@ -104,28 +133,17 @@
 
 (defn copy-remote-file
   [hostname filepath destination]
-  (let [local-file (file destination (str hostname () filepath))
-        host (find-host hostname qut-wsn.core/node-tree)]
+  (let [filename (.getName (file filepath))
+        local-file (file destination (str hostname "-" filename))
+        host (host-value hostname :name)]
     (info "Copying" filepath "from" hostname "to" (.getPath local-file))
     (local-exec (get-path filepath (.getPath local-file) (host :user) (host :address)))))
 
-; folder size eg. (FileUtils/sizeOfDirectory (clojure.java.io/file "/home/luke/uni"))
-
-(defn hidden-file?
-  [file]
-  (= (first (.getName file)) \.))
-
-(defn compare-files
-  [file1 file2]
-  (let [mod1 (from-long (.lastModified file1))
-        mod2 (from-long (.lastModified file2))]
-    (compare mod1 mod2)))
-
-(defn oldest-files
-  "Returns a list of files in folder sorted by oldest last modified time."
-  [folder]
-  (let [file-list (aclone (.listFiles (clojure.java.io/file folder)))]
-    (reverse (map #(.getPath %) (sort compare-files (filter #(not (hidden-file? %)) file-list))))))
+(defn update-network
+  [network-config]
+  (let [new-config (find-host (hostname) (read-string network-config))]
+    (save-network-config new-config)
+    (pr-str new-config)))
 
 (defn stop
   []

@@ -13,6 +13,6 @@
                  [com.taoensso/timbre "3.0.0"]
                  [com.taoensso/nippy "2.5.2"]]
   :java-source-paths ["java/src"]
-  :repositories {"project" "file:repository"}
+  :repositories {"project" "file:repo"}
   :profiles {:uberjar {:aot :all}}
   :main qut-wsn.core)

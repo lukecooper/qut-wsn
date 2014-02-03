@@ -51,14 +51,14 @@
 
 (defn local-exec
   [& commands]
-  (doall (map #(:out (apply clojure.java.shell/sh (clojure.string/split % #"\s+"))) commands)))
+  (first (doall (map #(:out (apply clojure.java.shell/sh (clojure.string/split % #"\s+"))) commands))))
 
 (defn remote-exec
   [host-address & commands]
   (let [agent (ssh/ssh-agent {})
         session (ssh/session agent host-address {:strict-host-key-checking :no})]
     (ssh/with-connection session
-      (doall (map #(:out (ssh/ssh session {:cmd %})) commands)))))
+      (first (doall (map #(:out (ssh/ssh session {:cmd %})) commands))))))
 
 (comment
   compile

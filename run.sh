@@ -20,7 +20,8 @@ ssh -l $user $address ${killscript}
 # copy new jar and config files
 lein jar
 scp $jarfile $user@$address:$targetdir
-scp *.clj $user@$address:$targetdir
+scp hosts.list $user@$address:$targetdir
+scp network.map $user@$address:$targetdir
 
 # restart
 ssh -l $user $address ${runscript} 

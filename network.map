@@ -1,5 +1,5 @@
 ;; Network structure with role assignments
 {:name "larry"
  :role "collector"
- :nodes [{:name "debian"
+ :nodes [{:name "qut-rpi-001"
           :role "sensor"}]}

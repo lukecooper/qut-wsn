@@ -7,3 +7,5 @@ pom.xml
 .lein-deps-sum
 .lein-repl-history
 .nrepl-port
+nature.mp3
+network.config
