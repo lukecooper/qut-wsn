@@ -108,6 +108,7 @@
   (if-not (nil? task-name)
     (let [socket (.socket ctx ZMQ/SUB)
           filter (str task-name)]
+      (info "subscribing to address" (host-value (hostname) :address))
       (.connect socket (format "tcp://%s:%s" (host-value (hostname) :address) publish-port))
       (.subscribe socket filter)
       (info "Waiting for" filter)
@@ -147,6 +148,8 @@
 (defn collector-task
   [task-name publish]
   (let [task (find-by-name task-name tasks)]
+    (info "collector task running" task)
+    (info "waiting for" (task :input))
     (loop [input (wait-for (task :input))]
       (let [[host message] (split input #":" 2)]
         (info "Executing task" task "with input" input "from host" host)
@@ -169,6 +172,7 @@
 
 (defmethod run-query "collector"
   [query publish]
+  (info "run-query collector")
   ;; forward query to child nodes
   (doall (pmap (fn [node] (send-message (:address node) listen-port (pr-str query)))
                (host-value (hostname) :nodes)))
@@ -204,6 +208,7 @@
 (defn bind-publish-socket
   [address port]
   (when (nil? @publish-socket)
+    (info "creating publish socket on" address)
     (dosync
      (ref-set publish-socket (.socket ctx ZMQ/PUB))
      (.bind @publish-socket (format "tcp://%s:%s" address port)))))
