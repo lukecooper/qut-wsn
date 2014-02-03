@@ -55,18 +55,24 @@
     :repeat true
     :steps [{:call "render-spectrogram"}]}
 
-   {:name "render-aci"
+   {:name "copy-aci"
     :input "aci"
     :repeat true
-    :steps [{:call "copy-file"
-             :params ["aci-render"]}
-            {:call "render-aci"
-             :params ["aci.png"]}]}])
+    :steps [{:call "copy-remote-file"
+             :params ["aci"]}]}
+
+   {:name "stop"
+    :steps [{:call "stop"}]}])
 
 (def queries
   [{:name "aci"
     :sensor ["record" "spectrogram" "render-spectrogram" "aci"]
-    :collector ["render-aci"]}])
+    :collector ["copy-aci"]}
+
+   ;; stops all listeners
+   {:name "stop"
+    :sensor ["stop"]
+    :collector ["stop"]}])
 
 ;;
 ;; RECIPIENT
@@ -127,6 +133,16 @@
       (if (task :repeat)
         (recur (wait-for (task :input)))))))
 
+(defn collector-task
+  [task-name publish]
+  (let [task (find-by-name task-name tasks)]
+    (loop [input (wait-for (task :input))]
+      (let [[host message] (split input #":" 2)]
+        (info "Executing task" task "with input" input "from host" host)
+        (publish (task :name) (run-steps [host message] (task :steps)))
+        (if (task :repeat)
+          (recur (wait-for (task :input))))))))
+
 (declare send-message)
 
 ;; dispatch run-query on the role of the current host
@@ -146,8 +162,7 @@
   (doall (pmap (fn [node] (send-message (:address node) listen-port (pr-str query)))
                (lookup-nodes (hostname) node-tree)))
   ;; run collector tasks
-  ;; (doall (pmap #(collector-task % publish) (query :sensor)))
-  )
+  (doall (pmap #(collector-task % publish) (query :collector))))
 
 (declare decode-message)
 
@@ -159,39 +174,37 @@
     (loop [query (read-string (String. (.recv listen-socket)))]
       (info "Received query" (str query))            
       (future (run-query query (partial publish publish-socket)))
-      (.send listen-socket (String. "ok"))      
-      (recur (decode-message (String. (.recv listen-socket)))))))
+      (.send listen-socket (String. "ok"))
+      (recur (read-string (String. (.recv listen-socket)))))))
 
 (defn listen-for-result
   [host port publish-socket]
-  (let [listen-socket (.socket ctx ZMQ/SUB)]    
+  (let [listen-socket (.socket ctx ZMQ/SUB)]
     (.connect listen-socket (format "tcp://%s:%s" (host-address host) publish-port))
     (.subscribe listen-socket "")
     (info "Listening to" host "for results")
     (loop [result (String. (.recv listen-socket))]
       (info "Result from" host result)
       (let [[filter message] (split result #":" 2)]
-        (publish publish-socket filter (join [host ":" message])))
-      (recur (String. (.recv listen-socket))))))
+        (publish publish-socket filter (join [host ":" message]))
+        (if-not (= filter "stop")        
+          (recur (String. (.recv listen-socket))))))))
 
 (defn bind-publish-socket
   [address port]
   (when (nil? @publish-socket)
-    (info "publish-socket nil")
     (dosync
      (ref-set publish-socket (.socket ctx ZMQ/PUB))
      (.bind @publish-socket (format "tcp://%s:%s" address port)))))
 
 (defn -main
   [& args]
-  (info "Starting")
+  (info "Starting")  
   (let [local-address (host-address "localhost")]
     (bind-publish-socket local-address publish-port)
     (.addShutdownHook (Runtime/getRuntime)
-                      (Thread. (fn []
-                                 (dosync (.close @publish-socket)))))    
-    (doall (pmap (fn [node]                   
-                   (future (listen-for-result (node :name) publish-port @publish-socket)))
+                      (Thread. (fn [] (dosync (.close @publish-socket)))))    
+    (doall (pmap (fn [node] (future (listen-for-result (node :name) publish-port @publish-socket)))
                  (lookup-nodes (hostname) node-tree)))    
     (listen-for-query local-address listen-port @publish-socket)))
 
@@ -206,12 +219,10 @@
 (defn send-message
   "Synchronously sends a string message to the given address and returns the response."
   [address port message]
-  (info "Send message")
   (let [socket (.socket ctx ZMQ/REQ)
         sock-addr (format "tcp://%s:%s" address port)]
-    (info "Connecting to" address ":" port)
     (.connect socket sock-addr)
-    (info "Sending" message)
+    (info "Sending" message "to" address)
     (.send socket message)
     (let [response (String. (.recv socket))]
       (info "Response" response)
@@ -219,17 +230,17 @@
       response)))
 
 (defn map-query
-  [query-name]  
+  [query-name]
   (bind-publish-socket (host-address "localhost") publish-port)
-  (let [query (find-by-name query-name queries)
-        listeners (doall (pmap (fn [node] (future (listen-for-result (node :name) publish-port @publish-socket)))
-                               (lookup-nodes (hostname) node-tree)))]
+  (doall (map (fn [node] (future (listen-for-result (node :name) publish-port @publish-socket)))
+              (lookup-nodes (hostname) node-tree)))
+  (let [query (find-by-name query-name queries)]
+    (info "Running query")
     (when-not (nil? query)
-      (run-query query @publish-socket))
-    listeners))
+      (run-query query (partial publish @publish-socket)))))
 
-(defn cancel-listeners
-  [listeners]
-  (doall  (pmap future-cancel listeners)))
+(defn stop-listeners
+  []
+  (run-query "stop" @publish-socket))
 
 

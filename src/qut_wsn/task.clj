@@ -2,6 +2,7 @@
   (:gen-class)
   
   (:use [qut-wsn.control])
+  (:use [qut-wsn.config])
   
   (:use [clojure.java.shell :only [sh]])
   (:use [clojure.string :only [trim]])
@@ -20,7 +21,15 @@
   (:import [java.nio ByteBuffer])
   (:import [org.apache.commons.io FileUtils])
 
-  (:require [taoensso.nippy :as nippy]))
+  (:require [taoensso.nippy :as nippy])
+
+  (:require [taoensso.timbre :as timbre]))
+
+;; include logging
+(timbre/refer-timbre)
+(timbre/set-config! [:appenders :spit :enabled?] true)
+(timbre/set-config! [:shared-appender-config :spit-filename] "log/wsn.log")
+
 
 (defn seconds-remaining
   "Returns the number of seconds (to three places) until the next minute begins for
@@ -93,6 +102,13 @@
   (FileUtils/moveToDirectory (file filepath) (file destination) true)
   (.getPath (file destination (.getName (file filepath)))))
 
+(defn copy-remote-file
+  [hostname filepath destination]
+  (let [local-file (file destination (str hostname () filepath))
+        host (find-host hostname qut-wsn.core/node-tree)]
+    (info "Copying" filepath "from" hostname "to" (.getPath local-file))
+    (local-exec (get-path filepath (.getPath local-file) (host :user) (host :address)))))
+
 ; folder size eg. (FileUtils/sizeOfDirectory (clojure.java.io/file "/home/luke/uni"))
 
 (defn hidden-file?
@@ -110,3 +126,7 @@
   [folder]
   (let [file-list (aclone (.listFiles (clojure.java.io/file folder)))]
     (reverse (map #(.getPath %) (sort compare-files (filter #(not (hidden-file? %)) file-list))))))
+
+(defn stop
+  []
+  "stop")

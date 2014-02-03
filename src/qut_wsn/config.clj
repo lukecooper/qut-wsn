@@ -49,3 +49,9 @@
   (let [host (find-host hostname host-tree)]
     (if-not (nil? host)
       (host :nodes))))
+
+(defn lookup-address
+  [hostname host-tree]
+  (let [host (find-host hostname host-tree)]
+    (if-not (nil? host)
+      (host :address))))
