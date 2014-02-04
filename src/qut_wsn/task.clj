@@ -39,7 +39,7 @@
 
 (defn filepath
   [filename]
-  (.getPath (clojure.java.io/file filename)))
+  (.getAbsolutePath (clojure.java.io/file filename)))
 
 (defn replace-ext
   [filepath ext]
@@ -129,15 +129,17 @@
 (defn move-file
   [filepath destination]
   (FileUtils/moveToDirectory (file filepath) (file destination) true)
-  (.getPath (file destination (.getName (file filepath)))))
+  (.getAbsolutePath (file destination (.getName (file filepath)))))
 
 (defn copy-remote-file
   [hostname filepath destination]
   (let [filename (.getName (file filepath))
-        local-file (file destination (str hostname "-" filename))
-        host (host-value hostname :name)]
+        local-file (file destination (str hostname "-" filename))]
     (info "Copying" filepath "from" hostname "to" (.getPath local-file))
-    (local-exec (get-path filepath (.getPath local-file) (host :user) (host :address)))))
+    (FileUtils/forceMkdir (file destination))
+    (local-exec (get-path filepath (.getPath local-file) (host-value hostname :user) (host-value hostname :address)))
+    (.getAbsolutePath local-file)))
+
 
 (defn update-network
   [network-config]

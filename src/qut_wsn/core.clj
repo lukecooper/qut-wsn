@@ -28,10 +28,10 @@
 (def tasks
   [{:name "record"
     :repeat true
-    :steps [{:call "fake-record-audio"
-             :params ["nature.mp3" 44800 16 1]}
+    :steps [{:call "record-audio"
+             :params [44800 16 1]}
             {:call "move-file"
-             :params ["recordings"]}]}
+             :params ["data/recordings"]}]}
    
    {:name "spectrogram"
     :input "record"
@@ -39,14 +39,14 @@
     :steps [{:call "spectrogram"
              :params [1024 0]}
             {:call "move-file"
-             :params ["spectrograms"]}]}
+             :params ["data/spectrograms"]}]}
 
    {:name "aci"
     :input "spectrogram"
     :repeat true
     :steps [{:call "aci"}
             {:call "move-file"
-             :params ["aci"]}]}
+             :params ["data/aci"]}]}
 
    {:name "render-spectrogram"
     :input "spectrogram"
@@ -57,13 +57,13 @@
     :input "aci"
     :repeat true
     :steps [{:call "copy-remote-file"
-             :params ["aci"]}]}
+             :params ["data/aci"]}]}
 
    {:name "get-spectrogram-images"
     :input "render-spectrogram"
     :repeat true
     :steps [{:call "copy-remote-file"
-             :params ["spectrogram-images"]}]}
+             :params ["data/spectrogram-images"]}]}
 
    {:name "update-network"
     :steps [{:call "update-network"}]}
@@ -141,7 +141,8 @@
   (let [task (find-by-name task-name tasks)]
     (loop [input (wait-for (task :input))]
       (info "Executing task" task "with input" input)
-      (publish (task :name) (run-steps input (task :steps)))
+      (publish
+       (task :name) (run-steps input (task :steps)))
       (if (task :repeat)
         (recur (wait-for (task :input)))))))
 
