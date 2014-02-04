@@ -28,8 +28,8 @@
 (def tasks
   [{:name "record"
     :repeat true
-    :steps [{:call "record-audio"
-             :params [44800 16 1]}
+    :steps [{:call "fake-record-audio"
+             :params ["nature.mp3" 44800 16 1]}
             {:call "move-file"
              :params ["data/recordings"]}]}
    

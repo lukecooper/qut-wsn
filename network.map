@@ -1,5 +1,5 @@
 ;; Network structure with role assignments
-{:name "tatooine"
+{:name "wsn-prime"
  :role "collector"
- :nodes [{:name "debianvm"
+ :nodes [{:name "qut-rpi-001"
           :role "sensor"}]}
