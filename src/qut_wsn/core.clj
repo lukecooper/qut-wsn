@@ -14,6 +14,14 @@
 (timbre/refer-timbre)
 (timbre/set-config! [:appenders :spit :enabled?] true)
 (timbre/set-config! [:shared-appender-config :spit-filename] "log/wsn.log")
+(timbre/set-config! [:fmt-output-fn] 
+   (fn [{:keys [level throwable message timestamp hostname ns]}
+       ;; Any extra appender-specific opts:
+       & [{:keys [nofonts?] :as appender-fmt-output-opts}]]
+     ;; <LEVEL> [<ns>] - <message> <throwable>
+     (format "%s [%s] - %s%s"
+       (-> level name clojure.string/upper-case) ns (or message "")
+       (or (timbre/stacktrace throwable "\n" (when nofonts? {})) ""))))
 
 ;; default zeromq context for this app
 (def ctx (ZMQ/context 1))
@@ -28,15 +36,15 @@
 (def tasks
   [{:name "record"
     :repeat true
-    :steps [{:call "fake-record-audio"
-             :params ["nature.mp3" 44800 16 1]}
+    :steps [{:call "record-audio"
+             :params [44800 16 1]}
             {:call "move-file"
              :params ["data/recordings"]}]}
    
    {:name "spectrogram"
     :input "record"
     :repeat true
-    :steps [{:call "spectrogram"
+    :steps [{:call "calculate-spectrogram"
              :params [1024 0]}
             {:call "move-file"
              :params ["data/spectrograms"]}]}
@@ -44,20 +52,30 @@
    {:name "aci"
     :input "spectrogram"
     :repeat true
-    :steps [{:call "aci"}
+    :steps [{:call "calculate-aci"}
             {:call "move-file"
              :params ["data/aci"]}]}
 
    {:name "render-spectrogram"
     :input "spectrogram"
     :repeat true
-    :steps [{:call "render-spectrogram"}]}
+    :steps [{:call "render-array"}]}
 
    {:name "get-aci"
     :input "aci"
     :repeat true
     :steps [{:call "copy-remote-file"
              :params ["data/aci"]}]}
+
+   {:name "collate-aci"
+    :input "get-aci"
+    :repeat true
+    :steps [{:call "append-aci"}]}
+
+   {:name "render-aci"
+    :input "collate-aci"
+    :repeat true
+    :steps [{:call "render-array"}]}
 
    {:name "get-spectrogram-images"
     :input "render-spectrogram"
@@ -74,7 +92,7 @@
 (def queries
   [{:name "aci"
     :sensor ["record" "spectrogram" "render-spectrogram" "aci"]
-    :collector ["get-aci" "get-spectrogram-images"]}
+    :collector ["get-aci" "get-spectrogram-images" "collate-aci" "render-aci"]}
 
    {:name "update-network"
     :sensor ["update-network"]
@@ -91,11 +109,11 @@
 
 (defn append-filter
   [filter message]
-  (join (list filter ":" message)))
+  (join (list filter "|" message)))
 
 (defn remove-filter
   [message]
-  (second (split message #":" 2)))
+  (second (split message #"\|" 2)))
 
 (defn publish
   [socket source message]
@@ -152,11 +170,13 @@
     (info "collector task running" task)
     (info "waiting for" (task :input))
     (loop [input (wait-for (task :input))]
-      (let [[host message] (split input #":" 2)]
+      (let [[host message] (split input #"\|" 2)]
         (info "Executing task" task "with input" input "from host" host)
-        (publish (task :name) (run-steps [host message] (task :steps)))
-        (if (task :repeat)
-          (recur (wait-for (task :input))))))))
+        (let [result (run-steps [host message] (task :steps))]
+          (info "Task finished with result" result)
+          (publish (task :name) result)
+          (if (task :repeat)
+            (recur (wait-for (task :input)))))))))
 
 (declare send-message)
 
@@ -201,8 +221,8 @@
     (info "Listening to" hostname "for results")
     (loop [result (String. (.recv listen-socket))]
       (info "Result from" hostname result)
-      (let [[filter message] (split result #":" 2)]
-        (publish publish-socket filter (join [hostname ":" message]))
+      (let [[filter message] (split result #"\|" 2)]
+        (publish publish-socket filter (join [hostname "|" message]))
         (if-not (= filter "stop")        
           (recur (String. (.recv listen-socket))))))))
 

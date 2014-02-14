@@ -28,4 +28,17 @@ public class ACI {
  
         return aciArray;    
     }
+
+    /**
+     *
+     */
+    public static double[][] appendACI(double[][] collatedACI, double[] aci) {
+        int aciCount = collatedACI.length;
+        double[][] result = new double[aciCount+1][];
+
+        System.arraycopy(collatedACI, 0, result, 0, aciCount);
+        result[aciCount] = aci;
+
+        return result;
+    }
 }
